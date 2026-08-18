@@ -18,6 +18,11 @@ describe("useOrderStream", () => {
     expect(MockEventSource.instances[0].url).toContain("/sse/orders/o1");
   });
 
+  it("does not connect when orderId is empty", () => {
+    renderHook(() => useOrderStream("", null));
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
   it("updates status when a saga event arrives", () => {
     const { result } = renderHook(() => useOrderStream("o1", "CREATED"));
     const source = MockEventSource.instances[0];

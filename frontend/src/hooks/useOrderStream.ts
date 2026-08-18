@@ -11,6 +11,8 @@ export function useOrderStream(orderId: string, initialStatus: OrderStatus | nul
   const [status, setStatus] = useState<OrderStatus | null>(initialStatus);
 
   useEffect(() => {
+    if (!orderId) return;
+
     const source = new EventSource(`${BASE_URL}/sse/orders/${orderId}`);
 
     source.onmessage = (message) => {
