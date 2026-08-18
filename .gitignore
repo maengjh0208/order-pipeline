@@ -218,3 +218,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 .idea/
+
+# The Python "lib/" rule above (line 17) matches any dir named lib/ anywhere
+# in the tree, which also caught our frontend source. Un-ignore it.
+!frontend/src/lib/
+!frontend/src/lib/**
