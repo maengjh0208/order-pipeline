@@ -60,21 +60,26 @@ Kafka 토픽:
 - 컨슈머 그룹 ID: 서비스 이름과 동일하게 맞춘다 (예: `inventory-service`). 인스턴스를 여러 개로 스케일 아웃해도 같은 메시지가 중복 처리되지 않게 하기 위함.
 - 가격/금액 계산은 이 프로젝트 범위 밖이다 (YAGNI) — 결제 커맨드는 실제 결제 금액을 계산하지 않고 성공/실패 시뮬레이션에 필요한 필드만 가진다.
 
-**`commands.inventory`** — 오케스트레이터 → inventory-service: 재고 예약 요청
+**`commands.inventory`** — 오케스트레이터 → inventory-service: 재고 예약/해제 요청. `action`으로 두 경우를 구분한다 (별도 토픽을 만들지 않고 필드로 구분해 "리소스당 토픽 하나" 스타일을 유지).
 
 ```json
 {
   "order_id": "uuid",
+  "action": "RESERVE | RELEASE",
   "items": [{ "product_id": "p1", "quantity": 1 }]
 }
 ```
 
-**`events.inventory`** — inventory-service → 오케스트레이터: 예약 결과
+- `RESERVE`: 최초 재고 예약 시도
+- `RELEASE`: **보상 트랜잭션(compensating transaction)**. 재고는 이미 예약됐지만 이후 단계(결제)가 최종 실패했을 때, 예약을 되돌려서 재고 누수를 막기 위해 발행한다. 3절 상태 머신의 `COMPENSATING_INVENTORY` 단계에서 발행됨.
+
+**`events.inventory`** — inventory-service → 오케스트레이터: 처리 결과
 
 ```json
 {
   "order_id": "uuid",
-  "result": "RESERVED | OUT_OF_STOCK",
+  "action": "RESERVE | RELEASE",
+  "result": "RESERVED | OUT_OF_STOCK | RELEASED",
   "reason": "out_of_stock | null"
 }
 ```
@@ -127,10 +132,12 @@ CREATED
       → PAID → NOTIFYING → COMPLETED
       → PAYMENT_FAILED → RETRYING_PAYMENT (attempt 1/3 → 2/3 → 3/3)
           → PAID (재시도 중 성공)
-          → PAYMENT_FAILED_DLQ → CANCELLED
+          → PAYMENT_FAILED_DLQ → COMPENSATING_INVENTORY → CANCELLED
 ```
 
-**설계 포인트**: 재고부족과 결제실패를 비대칭으로 처리한다. 재고부족은 재시도해도 결과가 바뀌지 않으므로 즉시 `CANCELLED`로 종결하고, 결제실패만 일시적 오류일 가능성이 있다고 보고 재시도 대상으로 삼는다. 이 구분이 "왜 이렇게 설계했는가"에 대한 핵심 답변 포인트다.
+**설계 포인트 1**: 재고부족과 결제실패를 비대칭으로 처리한다. 재고부족은 재시도해도 결과가 바뀌지 않으므로 즉시 `CANCELLED`로 종결하고, 결제실패만 일시적 오류일 가능성이 있다고 보고 재시도 대상으로 삼는다. 이 구분이 "왜 이렇게 설계했는가"에 대한 핵심 답변 포인트다.
+
+**설계 포인트 2**: `PAYMENT_FAILED_DLQ`에서 바로 `CANCELLED`로 가지 않고 `COMPENSATING_INVENTORY`를 거친다. 결제가 최종 실패한 시점엔 이미 `inventory-service`가 재고를 예약(차감)해둔 상태이므로, 그 예약을 되돌리는 **보상 트랜잭션**(`commands.inventory` action=`RELEASE`)을 실행해야 재고 누수가 없다. Saga 패턴의 핵심이 "각 단계가 실패하면 이전 단계들을 보상 트랜잭션으로 되돌린다"는 것이므로, 이 단계가 빠지면 이름만 Saga이고 실제로는 보상 로직이 없는 반쪽짜리 구현이 된다. `INVENTORY_FAILED → CANCELLED`는 애초에 예약이 성공한 적이 없으므로 보상이 필요 없다.
 
 ## 4. API / SSE 계약
 

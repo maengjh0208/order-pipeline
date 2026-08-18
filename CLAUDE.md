@@ -58,11 +58,16 @@
 - mock 서버에 계획에 없던 CORS 미들웨어 추가 필요 — 브라우저 fetch/EventSource가 다른 origin(5173 ↔ 4000)이라 막혔던 걸 발견하고 수정함
 - 루트 `.gitignore`의 Python용 `lib/` 규칙이 `frontend/src/lib/`을 오탐지해서 예외 처리 추가함
 
+### wave 3 시작 전 처리할 것
+
+- 스펙 3절에 `PAYMENT_FAILED_DLQ → COMPENSATING_INVENTORY → CANCELLED`로 보상 트랜잭션 단계가 추가됨(재고 예약 해제). `docs/superpowers/plans/2026-08-18-order-pipeline-frontend.md`의 `OrderStatus` 타입(현재 11개로 기술됨)에 `COMPENSATING_INVENTORY`를 12번째로 추가해야 함 — Task 3 코드 블록, Global Constraints, `OrderTimeline`의 실패 라벨 매핑까지 같이 반영. mock 서버(Task 4)의 DLQ 시뮬레이션 로직도 이 단계를 거치도록 수정 필요.
+
 ## 백엔드 설계 결정
 
 - **서비스 간 이벤트 스키마는 공유 패키지로 묶지 않는다.** 4개 서비스(`order-saga-orchestrator`, `inventory-service`, `payment-service`, `notification-service`)는 서로의 코드를 전혀 모른다. Kafka 토픽별 메시지 스키마는 spec 문서에 문서화하고, 각 서비스가 그 문서를 보고 각자 Pydantic 모델을 독립적으로 정의한다.
   - **이유**: 공유 라이브러리는 DRY는 지키지만, 서비스 간 배포를 암묵적으로 묶어버려서(distributed monolith 위험) 마이크로서비스의 핵심 이점(독립 배포 가능성)을 해친다. 이 프로젝트는 DRY보다 결합도 최소화를 우선한다.
   - **적용 범위**: Python 코드(Pydantic 모델, 공용 함수 등) 공유 금지. 문서(마크다운 스펙)는 당연히 공유해야 함 — 공유하면 안 되는 건 "코드", 공유해야 하는 건 "계약에 대한 합의".
+- **결제 최종 실패 시 재고를 보상 트랜잭션으로 되돌린다.** `commands.inventory`에 `action: RESERVE | RELEASE` 필드를 추가(스펙 2.1절). 원래 스펙엔 없다가, "왜 orchestrator에 saga라는 이름이 붙었나" 논의 중 발견한 누락 — Saga 패턴의 핵심인 보상 트랜잭션이 빠져있으면 재고 누수 버그가 생김.
 
 ## 백로그 (나중에 실습해볼 것)
 
