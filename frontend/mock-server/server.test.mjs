@@ -27,3 +27,20 @@ describe("POST /orders", () => {
     expect(res.body.current_status).toBe("COMPLETED");
   });
 });
+
+describe("CORS", () => {
+  it("allows cross-origin requests from the Vite dev server", async () => {
+    const app = createApp({ stepDelayMs: 10 });
+    const res = await request(app).get("/orders/anything").set("Origin", "http://localhost:5173");
+    expect(res.headers["access-control-allow-origin"]).toBe("*");
+  });
+
+  it("responds to a CORS preflight OPTIONS request", async () => {
+    const app = createApp({ stepDelayMs: 10 });
+    const res = await request(app)
+      .options("/orders")
+      .set("Origin", "http://localhost:5173")
+      .set("Access-Control-Request-Method", "POST");
+    expect(res.status).toBe(204);
+  });
+});

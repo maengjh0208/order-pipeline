@@ -3,6 +3,21 @@ import { randomUUID } from "node:crypto";
 
 export function createApp({ stepDelayMs = 500 } = {}) {
   const app = express();
+
+  // The frontend (localhost:5173) and this mock server (localhost:4000) are
+  // different origins, so the browser blocks fetch()/EventSource unless the
+  // response says the origin is allowed. A real orchestrator needs this too.
+  app.use((req, res, next) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
+
   app.use(express.json());
 
   const orders = new Map();
