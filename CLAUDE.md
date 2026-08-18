@@ -12,12 +12,12 @@
 ## 역할 분담
 
 - **프론트엔드** (`frontend/`): Claude Code가 작성. 완전 초심자도 따라올 수 있게 매 작업마다 무엇을/왜 하는지 설명하며 진행
-- **백엔드/인프라** (`order-saga-orchestrator`, `inventory-service`, `payment-service`, `notification-service`, Docker Compose 등): 사용자가 직접 작성. Claude Code는 작성된 코드를 리뷰하며 동작 원리와 설계 이유를 설명
+- **백엔드/인프라** (`order-saga-orchestrator`, `inventory-service`, `payment-service`, `notification-service`, Docker Compose 등): 사용자가 직접 타이핑하며 실습. Claude Code는 이 영역의 파일을 Write/Edit로 직접 건드리지 않는다. 완성된 코드를 사후 리뷰하는 게 아니라, 타이핑하기 **전에** 다음에 뭘 쓸지·왜 그렇게 쓰는지·어떻게 동작하는지 먼저 설명하고, 사용자가 직접 치는 동안 실시간으로 옆에서 안내하는 방식으로 진행
 
 ## 작업 방식 (사용자 지침, 2026-08-18 확정)
 
 1. 프론트는 Claude Code가 작성하되, 프론트를 전혀 모르는 개발자에게 가르치듯 각 작업의 목적과 흐름을 설명하며 진행한다.
-2. 백엔드/인프라는 사용자가 작성하고, Claude Code는 코드와 동작 원리·설계 이유를 상세히 설명해 자연스럽게 습득하도록 돕는다.
+2. 백엔드/인프라는 사용자가 직접 타이핑한다 — Claude Code는 이 영역의 파일을 절대 직접 Write/Edit하지 않는다. 사후 코드 리뷰가 아니라, 타이핑 전에 무엇을·왜·어떻게 쓸지 먼저 설명하고 실시간으로 옆에서 안내하며 실습을 돕는다.
 3. DRY 원칙을 지킨다.
 4. 테스트하기 쉬운 구조를 함께 고민한다.
 5. 결합도를 낮추는 방법을 함께 고민한다.
