@@ -51,6 +51,69 @@ Kafka 토픽:
 
 각 하위 서비스(inventory/payment/notification)는 커맨드 토픽을 구독해 처리하고 결과를 이벤트 토픽에 발행하는 단순한 워커로, 서로를 직접 알지 못한다.
 
+### 2.1 Kafka 메시지 스키마 (백엔드 서비스 간 계약)
+
+**이 스키마는 코드로 공유하지 않는다.** 4개 서비스는 이 문서를 보고 각자 자신의 Pydantic 모델을 독립적으로 정의한다. 공유 Python 패키지를 두면 DRY는 지켜지지만 서비스 배포가 암묵적으로 묶여버려(distributed monolith 위험), 마이크로서비스의 핵심 이점인 독립 배포 가능성을 해친다. 이 프로젝트는 DRY보다 결합도 최소화를 우선한다. (여러 팀이 협업하는 상황을 가정한 더 엄격한 계약 관리 방식—JSON Schema 검증, Schema Registry, 컨트랙트 테스트—은 이후 별도 실습 과제로 남겨둔다.)
+
+**공통 규칙**
+- 파티션 키: 모든 토픽에서 `order_id`를 키로 사용한다. Kafka는 파티션 "안에서만" 순서를 보장하므로, 같은 주문의 메시지들이 항상 같은 파티션으로 가게 해 순서를 보장한다.
+- 컨슈머 그룹 ID: 서비스 이름과 동일하게 맞춘다 (예: `inventory-service`). 인스턴스를 여러 개로 스케일 아웃해도 같은 메시지가 중복 처리되지 않게 하기 위함.
+- 가격/금액 계산은 이 프로젝트 범위 밖이다 (YAGNI) — 결제 커맨드는 실제 결제 금액을 계산하지 않고 성공/실패 시뮬레이션에 필요한 필드만 가진다.
+
+**`commands.inventory`** — 오케스트레이터 → inventory-service: 재고 예약 요청
+
+```json
+{
+  "order_id": "uuid",
+  "items": [{ "product_id": "p1", "quantity": 1 }]
+}
+```
+
+**`events.inventory`** — inventory-service → 오케스트레이터: 예약 결과
+
+```json
+{
+  "order_id": "uuid",
+  "result": "RESERVED | OUT_OF_STOCK",
+  "reason": "out_of_stock | null"
+}
+```
+
+**`commands.payment`** — 오케스트레이터 → payment-service: 결제 요청 (재시도마다 `attempt`를 올려 재발행)
+
+```json
+{
+  "order_id": "uuid",
+  "card_number": "4111111111111111",
+  "attempt": 1
+}
+```
+
+**`events.payment`** — payment-service → 오케스트레이터: 결제 결과
+
+```json
+{
+  "order_id": "uuid",
+  "attempt": 1,
+  "result": "PAID | FAILED",
+  "reason": "insufficient_funds | null"
+}
+```
+
+**`commands.notification`** — 오케스트레이터 → notification-service: 완료 알림 발송 요청
+
+```json
+{ "order_id": "uuid" }
+```
+
+**`events.notification`** — notification-service → 오케스트레이터: 발송 결과 (실패 경로 없음 — 3절 상태 머신상 `NOTIFYING`은 항상 `COMPLETED`로 이어짐)
+
+```json
+{ "order_id": "uuid", "result": "SENT" }
+```
+
+**`dlq.payment`** — 결제 재시도 3회(`attempt: 3`) 소진 시, 마지막 `events.payment` 메시지(`result: FAILED`)와 동일한 형태로 이 토픽에 적재한다. 프론트 대시보드뿐 아니라 Kafka 토픽을 직접 조회해서도 실패 건을 확인할 수 있게 하기 위함이다.
+
 ## 3. 주문 상태 머신
 
 오케스트레이터가 관리하고, 프론트는 이 상태만 구독하면 된다.
