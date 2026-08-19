@@ -25,12 +25,12 @@
 7. 사용자가 코드 작성을 완료하면 문법 오류/오타를 점검하고 필요한 피드백을 제공한다.
 8. 새 기능을 추가로 구현해야 할 때는 먼저 `docs/superpowers/specs`, `docs/superpowers/plans`에 스펙/계획을 작성한 뒤 진행한다.
 9. 현재 진행 상황을 이 파일에 최신 상태로 반영한다.
+10. **커밋은 사용자가 직접 한다** (2026-08-19 변경). Claude Code는 `git add`/`git commit`을 실행하지 않고, 변경 사항이 준비되면 커밋 메시지만 추천한다.
 
-## 브랜치 전략
+## 브랜치 전략 (2026-08-19 변경)
 
-- `main`: 문서(spec/plan/CLAUDE.md)만. 구현 코드는 커밋하지 않는다.
-- `feature/order-pipeline-frontend`: 프론트엔드 구현 작업 브랜치. 현재 여기서 작업 중.
-- 백엔드/인프라 작업을 시작하면 별도 브랜치(예: `feature/order-saga-orchestrator`)를 사용한다.
+- **그냥 `main` 하나로 작업한다.** feature 브랜치를 새로 만들지 않는다.
+- (이전엔 `feature/order-pipeline-frontend`, `feature/order-saga-orchestrator`로 나눠 작업했었음 — 브랜치 전환이 혼란스러워서 단순화함. 이 두 브랜치의 기존 커밋은 아직 main에 병합 전이라 별도로 처리 필요.)
 
 ## 현재 진행 상황 (2026-08-18 기준)
 
