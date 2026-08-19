@@ -23,6 +23,8 @@ services:
     build: ./order-saga-orchestrator
     ports:
       - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
     volumes:
       - ./order-saga-orchestrator/src/:/app/src
     depends_on:

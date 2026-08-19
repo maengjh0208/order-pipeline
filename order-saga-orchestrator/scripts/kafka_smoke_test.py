@@ -1,7 +1,7 @@
 from confluent_kafka import Producer, Consumer
 
 BOOTSTRAP_SERVICES = "localhost:9092"
-TOPIC = "smoke_test"
+TOPIC = "commands.inventory"
 
 
 def produce_one():
