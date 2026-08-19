@@ -39,8 +39,10 @@
 - [x] Notion에 요구사항/설계 문서 정리 (mermaid 다이어그램 포함)
 - [x] 프론트엔드 wave 1 (walking skeleton) 완료 — `feature/order-pipeline-frontend` 브랜치, 브라우저에서 주문 생성 → SSE로 상태가 실시간 갱신되는 것까지 확인함
 - [ ] 프론트엔드 wave 2~5 — 아래 "실행 순서" 참고
-- [ ] 백엔드(order-saga-orchestrator, inventory/payment/notification-service) — 사용자 작성 예정
-- [ ] Docker Compose 통합 및 로컬 시연
+- [x] `order-saga-orchestrator` 백엔드 wave 1 (walking skeleton) 완료 — `feature/order-saga-orchestrator` 브랜치. FastAPI `/health` 엔드포인트, uv(src 레이아웃), Dockerfile + `docker-compose.yaml`(src 볼륨 마운트로 핫리로드). `docker compose up --build`로 정상 구동 확인함. 아직 Kafka 연동 없음, REST 엔드포인트(`/orders` 등)도 없음.
+- [ ] `order-saga-orchestrator` 백엔드 wave 2 — Kafka를 docker-compose에 추가하고 producer/consumer 최소 동작 확인 (다음 단계 후보)
+- [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함
+- [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
 
 ### 프론트엔드 실행 순서 (예광탄 방식 적용)
 
