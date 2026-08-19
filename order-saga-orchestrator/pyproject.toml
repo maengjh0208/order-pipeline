@@ -1,0 +1,20 @@
+[project]
+name = "order-saga-orchestrator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "maengjh", email = "juhee.bda@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.3",
+]
+
+[project.scripts]
+order-saga-orchestrator = "order_saga_orchestrator:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"

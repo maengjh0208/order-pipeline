@@ -1,0 +1,8 @@
+services:
+  order-saga-orchestrator:
+    build: ./order-saga-orchestrator
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./order-saga-orchestrator/src/:/app/src
+
