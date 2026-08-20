@@ -1,9 +1,13 @@
+import json
 import threading
 from contextlib import asynccontextmanager
+from json import JSONDecodeError
 
 from confluent_kafka import Producer, Consumer
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
+from order_saga_orchestrator import orders
+from order_saga_orchestrator.orders import OrderStatus, Order
 from order_saga_orchestrator.config import settings
 from order_saga_orchestrator.topics import Topic
 
@@ -26,9 +30,23 @@ def consume_events_inventory():
             print(f"Consumer Error: {msg.error()}")
             continue
 
-        print(f"events.inventory 수신: key={msg.key()}, value={msg.value()}")
+        try:
+            event = json.loads(msg.value())
+        except JSONDecodeError:
+            continue
 
-    consumer.close()  # Consumer Group에서 나간다.
+        order_id = event["order_id"]
+        result = event["result"]
+
+        if result == "RESERVED":
+            orders.update_status(order_id, OrderStatus.INVENTORY_RESERVED)
+        elif result == "OUT_OF_STOCK":
+            orders.update_status(order_id, OrderStatus.INVENTORY_FAILED)
+
+        print(f"{Topic.EVENTS_INVENTORY} 수신: order_id={order_id}, result={result}")
+
+    # Consumer Group에서 나간다.
+    consumer.close()
 
 
 @asynccontextmanager
@@ -65,19 +83,26 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/_debug/produce")
-def debug_produce():
-    def on_delivery(err, msg):
-        if err is not None:
-            print(f"전송 실패: {err}")
-        else:
-            print(f"전송 성공: topic={msg.topic()}, partition={msg.partition()}")
+@app.post("/orders")
+def create_order() -> Order:
+    order = orders.create_order()
+    orders.update_status(order.id, OrderStatus.INVENTORY_RESERVING)
 
     app.state.producer.produce(
         Topic.COMMANDS_INVENTORY,
-        key="debug-order-id",
-        value='{"order_id": "debug-order-id", "action": "RESERVE", "items": []}',
-        callback=on_delivery,
+        key=order.id,
+        value=json.dumps({"order_id": order.id, "action": "RESERVE", "items": []}),  # value로 bytes나 str만 받는다.
     )
+    # TODO: flush()를 매번 호출하면 브로커에 실제로 전달될 때까지 응답이 지연됨 (처리량 손해) -- 지금은 데모 규모라 '확실히 전달됐나'를 중요하게 봐서 이렇게 진행.
     app.state.producer.flush()
-    return {"status": "produced"}
+
+    return order
+
+
+@app.get("/orders/{order_id}")
+def get_order(order_id: str) -> Order:
+    order = orders.get_order(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    return order
