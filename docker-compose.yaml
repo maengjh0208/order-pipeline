@@ -25,6 +25,7 @@ services:
       - "8000:8000"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      PYTHONUNBUFFERED: "1"
     volumes:
       - ./order-saga-orchestrator/src/:/app/src
     depends_on:

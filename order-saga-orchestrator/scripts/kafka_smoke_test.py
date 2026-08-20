@@ -1,7 +1,7 @@
 from confluent_kafka import Producer, Consumer
 
 BOOTSTRAP_SERVICES = "localhost:9092"
-TOPIC = "commands.inventory"
+TOPIC = "events.inventory"
 
 
 def produce_one():
@@ -13,7 +13,7 @@ def produce_one():
         else:
             print(f"전송 성공: topic={msg.topic()} partition={msg.partition()}")
 
-    # producer.produce(...)는 비동기다. 호출하는 순간 바로 전송되는 게 아니라, 내부 버퍼에 쌓인다. flush()를 해야 실제로 나가고, 결과(성공/실패)가 on_delivery 콜백으로 들어온다.
+    # producer.produce(...)는 호출하는 순간 바로 전송되는 게 아니라, 내부 버퍼에 쌓인다. flush()를 해야 실제로 나가고, 결과(성공/실패)가 on_delivery 콜백으로 들어온다.
     # key = 파티션 키 / value = 실제 메시지 내용
     producer.produce(TOPIC, key="hello", value="world", callback=on_delivery)
     print("=== flush 전 ===")
@@ -28,7 +28,6 @@ def consume_one():
         "group.id": "smoke-test-consumer",
         "auto.offset.reset": "earliest",
     })
-
     consumer.subscribe([TOPIC])
 
     msg = consumer.poll(timeout=10.0)
@@ -44,4 +43,4 @@ def consume_one():
 
 if __name__ == "__main__":
     produce_one()
-    consume_one()
+    # consume_one()

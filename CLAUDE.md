@@ -39,10 +39,31 @@
 - [x] Notion에 요구사항/설계 문서 정리 (mermaid 다이어그램 포함)
 - [x] 프론트엔드 wave 1 (walking skeleton) 완료 — `feature/order-pipeline-frontend` 브랜치, 브라우저에서 주문 생성 → SSE로 상태가 실시간 갱신되는 것까지 확인함
 - [ ] 프론트엔드 wave 2~5 — 아래 "실행 순서" 참고
-- [x] `order-saga-orchestrator` 백엔드 wave 1 (walking skeleton) 완료 — `feature/order-saga-orchestrator` 브랜치. FastAPI `/health` 엔드포인트, uv(src 레이아웃), Dockerfile + `docker-compose.yaml`(src 볼륨 마운트로 핫리로드). `docker compose up --build`로 정상 구동 확인함. 아직 Kafka 연동 없음, REST 엔드포인트(`/orders` 등)도 없음.
-- [ ] `order-saga-orchestrator` 백엔드 wave 2 — Kafka를 docker-compose에 추가하고 producer/consumer 최소 동작 확인 (다음 단계 후보)
-- [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함
+- [x] `order-saga-orchestrator` 백엔드 wave 1 (walking skeleton) 완료 — FastAPI `/health` 엔드포인트, uv(src 레이아웃), Dockerfile + `docker-compose.yaml`(src 볼륨 마운트로 핫리로드).
+- [x] `order-saga-orchestrator` 백엔드 wave 2 (Kafka 연결 증명) 완료 — 아래 "wave 2 상세" 참고. producer/consumer 둘 다 컨테이너 안 FastAPI 앱에서 직접 동작 확인함.
+- [ ] `order-saga-orchestrator` 백엔드 wave 3 — 지금은 `/_debug/produce`(임시 엔드포인트)와 `events.inventory` 하나만 구독하는 임시 컨슈머뿐. 이제 진짜 로직으로 교체해야 함:
+  - 진짜 REST 엔드포인트 (`POST /orders`, `GET /orders`, `GET /orders/{id}`, `GET /products`, `GET /ops/summary`) — 스펙 4절 계약대로
+  - SSE 엔드포인트 (`/sse/orders/{id}`, `/sse/ops`)
+  - 주문/사가 상태를 들고 있는 저장소 (일단 인메모리)
+  - 컨슈머를 `events.inventory` 하나가 아니라 `events.*` 전체(또는 필요한 만큼) 구독하도록 확장, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직
+  - `/_debug/produce`는 이 진짜 로직이 생기면 지워도 됨
+- [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함. 이 워커 서비스들은 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통)
 - [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
+
+### wave 2 상세 (Kafka 연결 증명, 2026-08-19~20)
+
+FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까지 증명 완료:
+- `lifespan`에서 `Producer`를 앱 시작 시 한 번만 만들어 `app.state.producer`에 저장, 종료 시 `flush()`
+- 백그라운드 `threading.Thread`로 `events.inventory`를 구독하는 컨슈머를 돌림 (`threading.Event`로 협조적 종료)
+- `pydantic-settings`로 `KAFKA_BOOTSTRAP_SERVERS` 등 설정 관리 (`config.py`)
+- `Topic` StrEnum으로 토픽 이름 관리 (`topics.py`) — 스펙 2.1절 토픽 전부 미리 정의해둠
+- 로컬(호스트)에서 Kafka 상태를 직접 찔러보는 `scripts/kafka_smoke_test.py` (일회성 진단 스크립트, `localhost:9092` 사용 — 컨테이너 안 앱은 `kafka:19092` 사용)
+
+**겪었던 문제와 해결 (다음에 또 겪을 수 있어서 기록):**
+- Bitnami Kafka 이미지가 태그 정책 바뀌어서 `bitnami/kafka:3.9` 못 씀 → 공식 `apache/kafka:latest`로 전환, KRaft 모드, 리스너 2개(`localhost:9092`=호스트용, `kafka:19092`=컨테이너 네트워크용)로 구성
+- `depends_on`은 "컨테이너 시작 순서"만 보장하고 "서비스 준비 완료"는 보장 안 함 → Kafka 뜨기 전에 orchestrator가 먼저 연결 시도해서 일시적 `Connection refused` 발생 (librdkafka가 자동 재시도해서 결국 붙음, 지금은 그냥 넘어감 — 나중에 `healthcheck` + `condition: service_healthy`로 근본 해결 가능)
+- 존재하지 않는 토픽을 구독하면 `UNKNOWN_TOPIC_OR_PART` 에러가 나고, librdkafka가 그 토픽에 대한 재확인 주기를 5분으로 늦춰버림 → 토픽이 나중에 생기면 컨슈머 재시작해서 새로 구독해야 바로 반영됨
+- Python `print()`가 Docker 로그에 바로 안 보임 (stdout이 파이프로 리다이렉트되면 블록 버퍼링됨) → `docker-compose.yaml`에 `PYTHONUNBUFFERED: "1"` 추가로 해결
 
 ### 프론트엔드 실행 순서 (예광탄 방식 적용)
 
