@@ -61,6 +61,9 @@ async def lifespan(app: FastAPI):
     #                   요청마다 독립적이라 다른 사람 정보가 섞일 일이 없다.
     app.state.producer = Producer({"bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS})
 
+    # consumer_thread가 시작되기 전에 events의 _loop가 세팅되어 있어야 한다.
+    events.set_event_loop(asyncio.get_running_loop())
+
     # daemon=True : 앱이 비정상 종료될 때, 이 스레드 때문에 프로세스가 안 죽고 걸려있는 걸 방지하는 안전장치.
     # 정상 종료는 join()으로 확실하게 기다린다.
     consumer_thread = threading.Thread(target=consume_events_inventory, daemon=True)
@@ -116,9 +119,7 @@ async def sse_order(order_id: str):
         q = events.subscribe()
         try:
             while True:
-                # q.get()은 기본적으로 큐에 뭔가 들어올 떄까지 블로킹된다.
-                # 그걸 asyncio.to_thread로 감싸서 별도 OS 스레드에서 기다리게 하면, 그 사이 메인 이벤트 루프는 다른 요청을 처리할 수 있다.
-                event = await asyncio.to_thread(q.get)
+                event = await q.get()
                 if event.get("order_id") != order_id:
                     continue
 

@@ -1,16 +1,21 @@
-import queue
+import asyncio
 
-# queue.Queue는 파이썬 표준 라이브러리가 제공하는 스레드 세이프 큐. (여러 스레드가 동시에 put()과 get()을 해도 내부적으로 lock을 걸어서 데이터가 깨지지 않게 보장해준다.)
-_subscribers: list[queue.Queue] = []
+_subscribers: list[asyncio.Queue] = []
+_loop: asyncio.AbstractEventLoop | None = None
 
 
-def subscribe() -> queue.Queue:
-    q = queue.Queue()
+def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    global _loop
+    _loop = loop
+
+
+def subscribe() -> asyncio.Queue:
+    q = asyncio.Queue()
     _subscribers.append(q)
     return q
 
 
-def unsubscribe(q: queue.Queue) -> None:
+def unsubscribe(q: asyncio.Queue) -> None:
     _subscribers.remove(q)
 
 
@@ -21,4 +26,4 @@ def publish(event: dict) -> None:
 
     # 필터링 없이 모든 구독자에게 뿌린다.
     for q in list(_subscribers):
-        q.put(event)
+        _loop.call_soon_threadsafe(q.put_nowait, event)
