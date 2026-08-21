@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 from contextlib import asynccontextmanager
@@ -5,8 +6,9 @@ from json import JSONDecodeError
 
 from confluent_kafka import Producer, Consumer
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 
-from order_saga_orchestrator import orders
+from order_saga_orchestrator import orders, events
 from order_saga_orchestrator.orders import OrderStatus, Order
 from order_saga_orchestrator.config import settings
 from order_saga_orchestrator.topics import Topic
@@ -106,3 +108,22 @@ def get_order(order_id: str) -> Order:
         raise HTTPException(status_code=404, detail="Order not found")
 
     return order
+
+
+@app.get("/sse/orders/{order_id}")
+async def sse_order(order_id: str):
+    async def event_generator():
+        q = events.subscribe()
+        try:
+            while True:
+                # q.get()은 기본적으로 큐에 뭔가 들어올 떄까지 블로킹된다.
+                # 그걸 asyncio.to_thread로 감싸서 별도 OS 스레드에서 기다리게 하면, 그 사이 메인 이벤트 루프는 다른 요청을 처리할 수 있다.
+                event = await asyncio.to_thread(q.get)
+                if event.get("order_id") != order_id:
+                    continue
+
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            events.unsubscribe(q)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

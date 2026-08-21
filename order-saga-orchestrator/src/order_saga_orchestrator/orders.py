@@ -3,6 +3,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from order_saga_orchestrator import events
+
 
 class OrderStatus(StrEnum):
     CREATED = "CREATED"
@@ -37,3 +39,4 @@ def update_status(order_id: str, status: OrderStatus) -> None:
     order = _orders.get(order_id)
     if order:
         order.status = status
+        events.publish({"order_id": order.id, "status": status})
