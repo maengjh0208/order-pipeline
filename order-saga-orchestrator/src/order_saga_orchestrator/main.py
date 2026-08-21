@@ -2,53 +2,16 @@ import asyncio
 import json
 import threading
 from contextlib import asynccontextmanager
-from json import JSONDecodeError
 
-from confluent_kafka import Producer, Consumer
+from confluent_kafka import Producer
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
 from order_saga_orchestrator import orders, events
 from order_saga_orchestrator.orders import OrderStatus, Order
 from order_saga_orchestrator.config import settings
+from order_saga_orchestrator.saga import consume_events, stop_consuming
 from order_saga_orchestrator.topics import Topic
-
-stop_consuming = threading.Event()
-
-
-def consume_events_inventory():
-    consumer = Consumer({
-        "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS,
-        "group.id": "order-saga-orchestrator",
-        "auto.offset.reset": "earliest",
-    })
-    consumer.subscribe([Topic.EVENTS_INVENTORY])
-
-    while not stop_consuming.is_set():
-        msg = consumer.poll(timeout=1.0)
-        if msg is None:
-            continue
-        if msg.error():
-            print(f"Consumer Error: {msg.error()}")
-            continue
-
-        try:
-            event = json.loads(msg.value())
-        except JSONDecodeError:
-            continue
-
-        order_id = event["order_id"]
-        result = event["result"]
-
-        if result == "RESERVED":
-            orders.update_status(order_id, OrderStatus.INVENTORY_RESERVED)
-        elif result == "OUT_OF_STOCK":
-            orders.update_status(order_id, OrderStatus.INVENTORY_FAILED)
-
-        print(f"{Topic.EVENTS_INVENTORY} 수신: order_id={order_id}, result={result}")
-
-    # Consumer Group에서 나간다.
-    consumer.close()
 
 
 @asynccontextmanager
@@ -66,14 +29,11 @@ async def lifespan(app: FastAPI):
 
     # daemon=True : 앱이 비정상 종료될 때, 이 스레드 때문에 프로세스가 안 죽고 걸려있는 걸 방지하는 안전장치.
     # 정상 종료는 join()으로 확실하게 기다린다.
-    consumer_thread = threading.Thread(target=consume_events_inventory, daemon=True)
+    consumer_thread = threading.Thread(target=consume_events, args=(app.state.producer,), daemon=True)
     consumer_thread.start()
 
     yield
 
-    # produce()는 비동기라서 호출하는 순간 메시지가 로컬 버퍼에 쌓이기만 하고 아직 브로커에게 전송되지 않았을 수도 있다.
-    # 앱이 종료될 때 이 버퍼에 아직 안 보낸 메시지가 남아있으면, 그냥 프로세스가 죽어버리면서 그 메시지들이 조용히 유실된다.
-    # flush()는 '커넥션을 정리한다'는 의미가 아니라, '버퍼에 남은 메시지들을 모두 실제로 보낼 떄까지 기다린다'는 의미이다.
     app.state.producer.flush()
 
     stop_consuming.set()
