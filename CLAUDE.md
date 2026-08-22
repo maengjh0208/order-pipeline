@@ -41,13 +41,14 @@
 - [ ] 프론트엔드 wave 2~5 — 아래 "실행 순서" 참고
 - [x] `order-saga-orchestrator` 백엔드 wave 1 (walking skeleton) 완료 — FastAPI `/health` 엔드포인트, uv(src 레이아웃), Dockerfile + `docker-compose.yaml`(src 볼륨 마운트로 핫리로드).
 - [x] `order-saga-orchestrator` 백엔드 wave 2 (Kafka 연결 증명) 완료 — 아래 "wave 2 상세" 참고. producer/consumer 둘 다 컨테이너 안 FastAPI 앱에서 직접 동작 확인함.
-- [ ] `order-saga-orchestrator` 백엔드 wave 3 — 지금은 `/_debug/produce`(임시 엔드포인트)와 `events.inventory` 하나만 구독하는 임시 컨슈머뿐. 이제 진짜 로직으로 교체해야 함:
-  - 진짜 REST 엔드포인트 (`POST /orders`, `GET /orders`, `GET /orders/{id}`, `GET /products`, `GET /ops/summary`) — 스펙 4절 계약대로
-  - SSE 엔드포인트 (`/sse/orders/{id}`, `/sse/ops`)
-  - 주문/사가 상태를 들고 있는 저장소 (일단 인메모리)
-  - 컨슈머를 `events.inventory` 하나가 아니라 `events.*` 전체(또는 필요한 만큼) 구독하도록 확장, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직
-  - `/_debug/produce`는 이 진짜 로직이 생기면 지워도 됨
-- [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함. 이 워커 서비스들은 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통)
+- [x] `order-saga-orchestrator` 백엔드 wave 3 (핵심 사가 로직) 완료 — 아래 "wave 3 상세" 참고. 주문 생성 → 재고 예약 → 결제(성공/실패) → 재시도(최대 3회) → DLQ 적재 → 재고 보상 트랜잭션 → 취소, 전체 사가가 SSE로 실시간 관측되는 것까지 end-to-end 확인함. `/_debug/produce`는 삭제함.
+  - [x] `POST /orders`, `GET /orders/{id}` — 스펙 4절 계약대로
+  - [x] `GET /sse/orders/{order_id}` — 스펙 4절 계약대로
+  - [ ] `GET /orders`(목록), `GET /products`, `GET /ops/summary`, `GET /sse/ops` — 아직 미구현
+  - [x] 주문/사가 상태를 들고 있는 저장소 (인메모리, `orders.py`)
+  - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
+- [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함. 이 워커 서비스들은 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통). 지금까지는 이 서비스들이 없어서 Kafka UI로 응답 이벤트를 수동 발행해 오케스트레이터 로직을 검증해왔음
+- [ ] 알림(`commands.notification`/`events.notification`, `NOTIFYING` → `COMPLETED`) — 결제 성공(`PAID`) 이후 흐름 아직 미구현
 - [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
 
 ### wave 2 상세 (Kafka 연결 증명, 2026-08-19~20)
@@ -64,6 +65,21 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 - `depends_on`은 "컨테이너 시작 순서"만 보장하고 "서비스 준비 완료"는 보장 안 함 → Kafka 뜨기 전에 orchestrator가 먼저 연결 시도해서 일시적 `Connection refused` 발생 (librdkafka가 자동 재시도해서 결국 붙음, 지금은 그냥 넘어감 — 나중에 `healthcheck` + `condition: service_healthy`로 근본 해결 가능)
 - 존재하지 않는 토픽을 구독하면 `UNKNOWN_TOPIC_OR_PART` 에러가 나고, librdkafka가 그 토픽에 대한 재확인 주기를 5분으로 늦춰버림 → 토픽이 나중에 생기면 컨슈머 재시작해서 새로 구독해야 바로 반영됨
 - Python `print()`가 Docker 로그에 바로 안 보임 (stdout이 파이프로 리다이렉트되면 블록 버퍼링됨) → `docker-compose.yaml`에 `PYTHONUNBUFFERED: "1"` 추가로 해결
+
+### wave 3 상세 (핵심 사가 로직, 2026-08-20~22)
+
+`order-saga-orchestrator/src/order_saga_orchestrator/` 구성 (package by feature — 기술적 종류가 아니라 관심사로 파일 분리):
+- `orders.py`: `OrderStatus`(StrEnum, 스펙 3절 상태 전부), `Order`(pydantic 모델), 인메모리 저장소(`_orders: dict[str, Order]`) + `create_order`/`get_order`/`update_status`. `update_status`가 상태를 바꿀 때마다 `events.publish()`도 같이 호출 — 호출하는 쪽이 매번 publish를 안 잊어도 되게
+- `events.py`: SSE용 pub/sub. `asyncio.Queue`를 구독자마다 하나씩 발급, `publish()`는 모든 구독자에게 필터링 없이 브로드캐스트(구독자가 알아서 걸러 씀 — `/sse/orders/{id}`는 필터링, 나중에 만들 `/sse/ops`는 그대로 다 흘려보내면 됨). 컨슈머 스레드(별도 OS 스레드)에서 이벤트 루프로 안전하게 넘기기 위해 `loop.call_soon_threadsafe(q.put_nowait, event)` 사용 — `asyncio.Queue`는 스레드 세이프가 아니라서. (처음엔 `queue.Queue` + `asyncio.to_thread`로 구현했다가, "동시 접속자가 스레드풀 크기(기본 ~32개)를 넘으면 어떻게 되나"라는 질문 계기로 스레드를 전혀 안 쓰는 이 방식으로 리팩터링함)
+- `saga.py`: Kafka 컨슈머(`consume_events(producer)`, `producer`를 인자로 받아서 `main.py`/FastAPI를 몰라도 되게— 순환참조 방지 + 테스트 용이성)와 실제 오케스트레이션 로직(`handle_events_inventory`, `handle_events_payment`). 컨슈머 하나가 `events.inventory`+`events.payment`를 함께 구독하고 `msg.topic()`으로 분기(토픽마다 스레드를 새로 만들지 않음 — 사가는 어차피 순차 조율이라 컨슈머 하나로 충분). 결제 실패 시 `attempt < 3`이면 재시도(`RETRYING_PAYMENT` + `commands.payment` 재발행), 3회 소진 시 `dlq.payment`에 원본 실패 이벤트 그대로 적재 + `commands.inventory`에 `action: RELEASE` 발행(보상 트랜잭션) + `COMPENSATING_INVENTORY`로 전이, 이후 `events.inventory`의 `RELEASED` 응답을 받으면 `CANCELLED`로 최종 종결
+- `main.py`: FastAPI 배선만 담당 (lifespan, 라우트). `POST /orders`, `GET /orders/{id}`, `GET /sse/orders/{order_id}`
+- `docker-compose.yaml`에 `kafka-ui`(`kafbat/kafka-ui`, `localhost:8080`) 추가 — 토픽/메시지를 브라우저에서 보고, `inventory-service`/`payment-service`가 아직 없는 지금은 이걸로 응답 이벤트를 수동 발행해서 오케스트레이터 로직을 검증하는 용도로 씀
+
+**검증한 전체 시나리오**: `POST /orders` → (Kafka UI로 `events.inventory` RESERVED 발행) → `PAYMENT_PROCESSING` → (`events.payment` FAILED × 3, attempt 1→2→3) → `RETRYING_PAYMENT` 반복 → `PAYMENT_FAILED_DLQ` → `dlq.payment` 적재 확인 + `commands.inventory` RELEASE 발행 확인 → `COMPENSATING_INVENTORY` → (Kafka UI로 `events.inventory` RELEASED 발행) → `CANCELLED`. 전체 과정을 `GET /sse/orders/{id}`로 실시간 스트리밍되는 것까지 curl -N으로 확인함.
+
+**참고 (다음에 이어갈 때)**:
+- `card_number`는 `POST /orders`가 아직 입력을 안 받아서 `saga.py`에 하드코딩(`"4111111111111111"`)되어 있음 — 나중에 실제 주문 폼이 생기면 `Order`에 필드 추가하고 여기로 넘겨받게 바뀔 것
+- `commands.inventory`의 `items`도 항상 빈 배열(`[]`)로 하드코딩 — 같은 이유
 
 ### 프론트엔드 실행 순서 (예광탄 방식 적용)
 
