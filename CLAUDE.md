@@ -47,8 +47,8 @@
   - [ ] `GET /orders`(목록), `GET /products`, `GET /ops/summary`, `GET /sse/ops` — 아직 미구현
   - [x] 주문/사가 상태를 들고 있는 저장소 (인메모리, `orders.py`)
   - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
+- [x] 알림(`commands.notification`/`events.notification`, `PAID` → `NOTIFYING` → `COMPLETED`) 완료 — 스펙 3절 상태 머신이 이제 전부 구현됨 (`CREATED`부터 `COMPLETED`/`CANCELLED`까지 모든 경로)
 - [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함. 이 워커 서비스들은 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통). 지금까지는 이 서비스들이 없어서 Kafka UI로 응답 이벤트를 수동 발행해 오케스트레이터 로직을 검증해왔음
-- [ ] 알림(`commands.notification`/`events.notification`, `NOTIFYING` → `COMPLETED`) — 결제 성공(`PAID`) 이후 흐름 아직 미구현
 - [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
 
 ### wave 2 상세 (Kafka 연결 증명, 2026-08-19~20)
@@ -80,6 +80,8 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 **참고 (다음에 이어갈 때)**:
 - `card_number`는 `POST /orders`가 아직 입력을 안 받아서 `saga.py`에 하드코딩(`"4111111111111111"`)되어 있음 — 나중에 실제 주문 폼이 생기면 `Order`에 필드 추가하고 여기로 넘겨받게 바뀔 것
 - `commands.inventory`의 `items`도 항상 빈 배열(`[]`)로 하드코딩 — 같은 이유
+- 순수 Python 코드 변경은 `docker compose up --build` 없이도 반영됨 — `./order-saga-orchestrator/src/`가 볼륨 마운트되어 있고 `uvicorn --reload`라서 자동 재시작됨. 리빌드는 `pyproject.toml`/`uv.lock`(의존성)이나 `Dockerfile`이 바뀔 때만 필요
+- `events.notification`처럼 **한 번도 안 쓰인 새 토픽**을 처음 구독할 때, 컨슈머가 뜬 시점에 토픽이 아직 없으면 `UNKNOWN_TOPIC_OR_PART` 이슈(wave 2 상세 참고)가 또 발생함 — Kafka UI로 메시지 발행해서 토픽 만든 뒤 `docker compose restart order-saga-orchestrator`로 재구독하면 해결
 
 ### 프론트엔드 실행 순서 (예광탄 방식 적용)
 

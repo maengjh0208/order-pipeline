@@ -47,6 +47,13 @@ def handle_events_payment(event: dict, producer: Producer) -> None:
 
     if result == "PAID":
         orders.update_status(order_id, OrderStatus.PAID)
+        orders.update_status(order_id, OrderStatus.NOTIFYING)
+        producer.produce(
+            Topic.COMMANDS_NOTIFICATION,
+            key=order_id,
+            value=json.dumps({"order_id": order_id})
+        )
+        producer.flush()
     elif result == "FAILED":
         orders.update_status(order_id, OrderStatus.PAYMENT_FAILED)
 
@@ -80,13 +87,23 @@ def handle_events_payment(event: dict, producer: Producer) -> None:
     print(f"{Topic.EVENTS_PAYMENT} 수신: order_id={order_id}, attempt={attempt}, result={result}")
 
 
+def handle_events_notification(event: dict, producer: Producer) -> None:
+    order_id = event["order_id"]
+    result = event["result"]
+
+    if result == "SENT":
+        orders.update_status(order_id, OrderStatus.COMPLETED)
+
+    print(f"{Topic.EVENTS_NOTIFICATION} 수신: order_id={order_id}, result={result}")
+
+
 def consume_events(producer: Producer) -> None:
     consumer = Consumer({
         "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS,
         "group.id": "order-saga-orchestrator",
         "auto.offset.reset": "earliest",
     })
-    consumer.subscribe([Topic.EVENTS_INVENTORY, Topic.EVENTS_PAYMENT])
+    consumer.subscribe([Topic.EVENTS_INVENTORY, Topic.EVENTS_PAYMENT, Topic.EVENTS_NOTIFICATION])
 
     while not stop_consuming.is_set():
         msg = consumer.poll(timeout=1.0)
@@ -105,5 +122,7 @@ def consume_events(producer: Producer) -> None:
             handle_events_inventory(event, producer)
         elif msg.topic() == Topic.EVENTS_PAYMENT:
             handle_events_payment(event, producer)
+        elif msg.topic() == Topic.EVENTS_NOTIFICATION:
+            handle_events_notification(event, producer)
 
     consumer.close()  # Consumer 그룹에서 나감.

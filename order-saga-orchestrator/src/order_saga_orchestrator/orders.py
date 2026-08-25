@@ -18,6 +18,8 @@ class OrderStatus(StrEnum):
     RETRYING_PAYMENT = "RETRYING_PAYMENT"  # 결제 재시도 진행중
     PAYMENT_FAILED_DLQ = "PAYMENT_FAILED_DLQ"  # 결제 재시도 3회 소진, 최종 실패
     COMPENSATING_INVENTORY = "COMPENSATING_INVENTORY"  # 결제 실패로 인해 재고 복구중
+    NOTIFYING = "NOTIFYING"
+    COMPLETED = "COMPLETED"
 
 
 class Order(BaseModel):
