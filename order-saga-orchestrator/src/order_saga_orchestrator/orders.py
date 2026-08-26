@@ -4,7 +4,8 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from order_saga_orchestrator import events
-from order_saga_orchestrator.models import OrderStatus
+from order_saga_orchestrator.db import get_session
+from order_saga_orchestrator.models import OrderStatus, OrderModel
 
 
 class Order(BaseModel):
@@ -15,21 +16,32 @@ class Order(BaseModel):
     status: OrderStatus = OrderStatus.CREATED
 
 
-_orders: dict[str, Order] = {}
-
-
-def create_order() -> Order:
+async def create_order() -> Order:
     order = Order()
-    _orders[order.id] = order
+
+    async with get_session() as session:
+        session.add(OrderModel(id=order.id, status=order.status))
+
     return order
 
 
-def get_order(order_id: str) -> Order | None:
-    return _orders.get(order_id)
+async def get_order(order_id: str) -> Order | None:
+    async with get_session() as session:
+        order_model = await session.get(OrderModel, order_id)
+
+        if order_model is None:
+            return None
+
+        return Order(id=order_model.id, status=order_model.status)
 
 
-def update_status(order_id: str, status: OrderStatus) -> None:
-    order = _orders.get(order_id)
-    if order:
-        order.status = status
-        events.publish({"order_id": order.id, "status": status})
+async def update_status(order_id: str, status: OrderStatus) -> None:
+    async with get_session() as session:
+        order_model = await session.get(OrderModel, order_id)
+
+        if order_model is None:
+            return None
+
+        order_model.status = status
+
+    events.publish({"order_id": order_model.id, "status": status})

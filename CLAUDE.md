@@ -49,7 +49,7 @@
   - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
 - [x] 알림(`commands.notification`/`events.notification`, `PAID` → `NOTIFYING` → `COMPLETED`) 완료 — 스펙 3절 상태 머신이 이제 전부 구현됨 (`CREATED`부터 `COMPLETED`/`CANCELLED`까지 모든 경로)
 - [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함. 이 워커 서비스들은 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통). 지금까지는 이 서비스들이 없어서 Kafka UI로 응답 이벤트를 수동 발행해 오케스트레이터 로직을 검증해왔음
-- [ ] `order-saga-orchestrator` 주문 저장소 인메모리 → PostgreSQL 전환 (진행 중, 아래 "백엔드 설계 결정" 참고)
+- [x] `order-saga-orchestrator` 주문 저장소 인메모리 → PostgreSQL 전환 완료 (아래 "백엔드 설계 결정" 참고) — `orders.py`/`main.py`/`saga.py` 전부 async DB 세션 기반으로 전환, 컨테이너 재시작 후에도 주문 상태가 유지되는 것 확인함 (첫 영속성 증명)
 - [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
 
 ### wave 2 상세 (Kafka 연결 증명, 2026-08-19~20)

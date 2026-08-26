@@ -1,4 +1,7 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from order_saga_orchestrator.config import settings
 
@@ -12,3 +15,14 @@ async_session_factory = async_sessionmaker(
     # 만료된 객체의 속성에 접근하면 SQLAlchemy는 최신 데이터를 다시 가져오기 위해 자동으로 DB에 SELECT쿼리를 다시 날린다.
     expire_on_commit=False,
 )
+
+
+@asynccontextmanager
+async def get_session() -> AsyncIterator[AsyncSession]:
+    async with async_session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
