@@ -6,9 +6,12 @@ from contextlib import asynccontextmanager
 from confluent_kafka import Producer
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 
 from order_saga_orchestrator import orders, events
-from order_saga_orchestrator.orders import OrderStatus, Order
+from order_saga_orchestrator.db import engine
+from order_saga_orchestrator.models import OrderStatus
+from order_saga_orchestrator.orders import Order
 from order_saga_orchestrator.config import settings
 from order_saga_orchestrator.saga import consume_events, stop_consuming
 from order_saga_orchestrator.topics import Topic
@@ -16,6 +19,13 @@ from order_saga_orchestrator.topics import Topic
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("========== FastAPI 시작 ==========")
+
+    async with engine.connect() as conn:
+        result = await conn.execute(text("SELECT 1"))
+        print(f"Postgres 연결 확인: {result.scalar()}")
+        print("----------------------------------")
+
     # app.state vs request.state 비교!
     # - app.state : app 객체 자체는 서버가 켜져있는 동안 딱 하나 존재한다. app.state에 넣은 건 모든 요청, 모든 사용자가 공유하는 값이다.
     # - request.state : FastAPI는 요청이 들어올 때마다 새로운 Request 객체를 만든다. 그 객체가 갖고 있는 .state는 그 요청 하나에만 스코프된다.
@@ -31,6 +41,8 @@ async def lifespan(app: FastAPI):
     # 정상 종료는 join()으로 확실하게 기다린다.
     consumer_thread = threading.Thread(target=consume_events, args=(app.state.producer,), daemon=True)
     consumer_thread.start()
+    print("Kafka Producer/Consumer 연결 완료")
+    print("----------------------------------")
 
     yield
 
@@ -38,6 +50,10 @@ async def lifespan(app: FastAPI):
 
     stop_consuming.set()
     consumer_thread.join()  # 메인 스레드가 기다려줌.
+
+    await engine.dispose()
+
+    print("========== FastAPI 종료 ==========")
 
 
 app = FastAPI(lifespan=lifespan)

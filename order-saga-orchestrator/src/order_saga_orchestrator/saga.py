@@ -6,7 +6,7 @@ from confluent_kafka import Producer, Consumer
 
 from order_saga_orchestrator import orders
 from order_saga_orchestrator.config import settings
-from order_saga_orchestrator.orders import OrderStatus
+from order_saga_orchestrator.models import OrderStatus
 from order_saga_orchestrator.topics import Topic
 
 stop_consuming = threading.Event()

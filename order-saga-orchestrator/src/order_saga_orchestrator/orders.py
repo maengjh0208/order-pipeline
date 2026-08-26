@@ -4,22 +4,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from order_saga_orchestrator import events
-
-
-class OrderStatus(StrEnum):
-    CREATED = "CREATED"
-    INVENTORY_RESERVING = "INVENTORY_RESERVING"
-    INVENTORY_RESERVED = "INVENTORY_RESERVED"
-    INVENTORY_FAILED = "INVENTORY_FAILED"
-    CANCELLED = "CANCELLED"
-    PAYMENT_PROCESSING = "PAYMENT_PROCESSING"
-    PAID = "PAID"
-    PAYMENT_FAILED = "PAYMENT_FAILED"  # 결제 시도 하나가 실패한 순간 (일시적)
-    RETRYING_PAYMENT = "RETRYING_PAYMENT"  # 결제 재시도 진행중
-    PAYMENT_FAILED_DLQ = "PAYMENT_FAILED_DLQ"  # 결제 재시도 3회 소진, 최종 실패
-    COMPENSATING_INVENTORY = "COMPENSATING_INVENTORY"  # 결제 실패로 인해 재고 복구중
-    NOTIFYING = "NOTIFYING"
-    COMPLETED = "COMPLETED"
+from order_saga_orchestrator.models import OrderStatus
 
 
 class Order(BaseModel):

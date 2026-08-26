@@ -11,8 +11,8 @@
 
 ## 역할 분담
 
-- **프론트엔드** (`frontend/`): Claude Code가 작성. 완전 초심자도 따라올 수 있게 매 작업마다 무엇을/왜 하는지 설명하며 진행
-- **백엔드/인프라** (`order-saga-orchestrator`, `inventory-service`, `payment-service`, `notification-service`, Docker Compose 등): 사용자가 직접 타이핑하며 실습. Claude Code는 이 영역의 파일을 Write/Edit로 직접 건드리지 않는다. 완성된 코드를 사후 리뷰하는 게 아니라, 타이핑하기 **전에** 다음에 뭘 쓸지·왜 그렇게 쓰는지·어떻게 동작하는지 먼저 설명하고, 사용자가 직접 치는 동안 실시간으로 옆에서 안내하는 방식으로 진행
+- **프론트엔드** (`frontend/`): Claude Code가 작성
+- **백엔드/인프라** (`order-saga-orchestrator`, `inventory-service`, `payment-service`, `notification-service`, Docker Compose 등): 사용자가 직접 타이핑. 상세 규칙은 아래 "작업 방식" 2번 참고
 
 ## 작업 방식 (사용자 지침, 2026-08-18 확정)
 
@@ -30,9 +30,9 @@
 ## 브랜치 전략 (2026-08-19 변경)
 
 - **그냥 `main` 하나로 작업한다.** feature 브랜치를 새로 만들지 않는다.
-- (이전엔 `feature/order-pipeline-frontend`, `feature/order-saga-orchestrator`로 나눠 작업했었음 — 브랜치 전환이 혼란스러워서 단순화함. 이 두 브랜치의 기존 커밋은 아직 main에 병합 전이라 별도로 처리 필요.)
+- (이전엔 `feature/order-pipeline-frontend`, `feature/order-saga-orchestrator`로 나눠 작업했었음 — 브랜치 전환이 혼란스러워서 단순화함. 두 브랜치 모두 이미 main에 병합 완료, 로컬에 남은 브랜치 자체는 안 지워도 무해함.)
 
-## 현재 진행 상황 (2026-08-18 기준)
+## 현재 진행 상황
 
 - [x] 아키텍처 브레인스토밍 및 spec 확정 (Orchestration 기반 Saga, 상태 머신, API/SSE 계약)
 - [x] 프론트엔드 구현 계획 작성
@@ -49,6 +49,7 @@
   - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
 - [x] 알림(`commands.notification`/`events.notification`, `PAID` → `NOTIFYING` → `COMPLETED`) 완료 — 스펙 3절 상태 머신이 이제 전부 구현됨 (`CREATED`부터 `COMPLETED`/`CANCELLED`까지 모든 경로)
 - [ ] `inventory-service`, `payment-service`, `notification-service` — 아직 시작 안 함. 이 워커 서비스들은 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통). 지금까지는 이 서비스들이 없어서 Kafka UI로 응답 이벤트를 수동 발행해 오케스트레이터 로직을 검증해왔음
+- [ ] `order-saga-orchestrator` 주문 저장소 인메모리 → PostgreSQL 전환 (진행 중, 아래 "백엔드 설계 결정" 참고)
 - [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
 
 ### wave 2 상세 (Kafka 연결 증명, 2026-08-19~20)
@@ -109,6 +110,12 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
   - **이유**: 공유 라이브러리는 DRY는 지키지만, 서비스 간 배포를 암묵적으로 묶어버려서(distributed monolith 위험) 마이크로서비스의 핵심 이점(독립 배포 가능성)을 해친다. 이 프로젝트는 DRY보다 결합도 최소화를 우선한다.
   - **적용 범위**: Python 코드(Pydantic 모델, 공용 함수 등) 공유 금지. 문서(마크다운 스펙)는 당연히 공유해야 함 — 공유하면 안 되는 건 "코드", 공유해야 하는 건 "계약에 대한 합의".
 - **결제 최종 실패 시 재고를 보상 트랜잭션으로 되돌린다.** `commands.inventory`에 `action: RESERVE | RELEASE` 필드를 추가(스펙 2.1절). 원래 스펙엔 없다가, "왜 orchestrator에 saga라는 이름이 붙었나" 논의 중 발견한 누락 — Saga 패턴의 핵심인 보상 트랜잭션이 빠져있으면 재고 누수 버그가 생김.
+- **`order-saga-orchestrator`의 주문 저장소를 인메모리 → PostgreSQL로 전환 (2026-08-26 결정, 진행 중).** 실제 상용 환경을 염두에 둔 실습을 원해서, DB 없이 가는 원래 방향(YAGNI)에서 전환함. 스택: PostgreSQL + SQLAlchemy 2.0(async) + asyncpg + Alembic(마이그레이션) — FastAPI+Postgres 조합의 실무 표준. `SQLModel`도 후보였으나 SQLAlchemy+Alembic이 더 널리 쓰이는 조합이라 이쪽으로 결정.
+  - **"DB가 스키마를 주도"(database-first, `sqlacodegen`으로 모델 역생성) 방식도 검토했으나 기각.** 그 방식은 여러 언어/팀이 하나의 DB를 공유할 때 유효한데, 이 프로젝트는 DB를 오케스트레이터 하나만 쓰는 database-per-service라 근거가 약함. Alembic(코드가 스키마를 주도) 쪽이 실무 표준이자 이 프로젝트 원칙과 일관됨.
+  - **스코프**: 이번엔 오케스트레이터의 주문 저장소만 DB로 옮김. `inventory-service`(아직 미구현)의 재고는 당분간 인메모리로 시작하고, 필요해지면 database-per-service 원칙대로 자기만의 별도 DB를 갖는 방향으로 나중에 확장.
+  - **예광탄 순서**: (1) `docker-compose.yaml`에 `postgres`(healthcheck 포함) 추가 + 연결 증명 — 완료 → (2) SQLAlchemy async 엔진/세션(`db.py`) + Alembic 초기 마이그레이션(`orders` 테이블, `models.py`) — 완료 → (3) `orders.py`의 저장소 함수를 실제 쿼리로 교체(`async def`로 전환) → (4) `main.py` 라우트도 `async def` + DB 세션 의존성 주입으로 전환 → (5) 컨테이너 재시작 후에도 주문이 조회되는지 확인 (첫 영속성 증명)
+  - **모델링 세부 결정**: `OrderStatus` enum은 순환참조 방지를 위해 `orders.py`가 아니라 `models.py`에 정의(`orders.py`가 이걸 import). `OrderModel.status`는 SQLAlchemy 네이티브 Enum이 아니라 그냥 `Mapped[str]`로 — 상태값을 자주 추가해온 프로젝트라(재시도/DLQ/알림 단계 등), 네이티브 ENUM이면 값 추가마다 `ALTER TYPE` 마이그레이션이 필요해서 부담됨. `OrderModel.id`는 `Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)` — DB엔 네이티브 UUID로 저장(공간 효율/형식 검증)하면서 Python 쪽엔 여전히 `str`로 받아서 기존 코드 변경 없음.
+  - **Alembic 관련 실전 팁**: `alembic init -t async <dir>`을 로컬(호스트, `uv` 있으면)에서 실행 — DB 접속이 필요 없는 순수 스캐폴딩이라 Docker와 무관하게 처리 가능하고 `-t async`면 비동기 엔진용 `env.py`가 이미 마련됨. 생성된 `alembic.ini`/`alembic/`은 `docker-compose.yaml`에 마운트 추가해서 컨테이너(`docker compose exec`)가 보게 함 — `postgres` 같은 도커 네트워크 전용 호스트명 때문에 실제 마이그레이션 생성/적용 명령 자체는 컨테이너 안에서 실행해야 함. 마이그레이션을 앱 시작 시 자동 실행하게 하지 않음(여러 인스턴스 동시 기동 시 경합 위험) — `docker compose exec`로 수동 실행하는 별도 단계로 분리.
 
 ## 백로그 (나중에 실습해볼 것)
 
@@ -118,7 +125,3 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
   3. **Confluent Schema Registry** 같은 중앙 스키마 레지스트리 — producer/consumer가 스키마를 자동으로 등록/검증하고, 하위·상위 호환성을 깨는 배포를 자동으로 막아줌
   4. **컨트랙트 테스트** (Pact 등) — 컨슈머가 "나는 이런 메시지를 기대한다"는 테스트를 작성해두고 CI에서 프로듀서 쪽 변경이 이를 깨는지 자동 검증
   - **진행 방식**: 이건 MVP 범위가 아니라 나중에 시간 남으면 하는 선택적 확장. 실습할 때가 되면 지침 8번대로 먼저 `docs/superpowers/specs`에 작은 스펙을 쓰고 시작한다.
-
-## 참고
-
-- 백엔드/인프라 코드가 이 저장소에 추가되면(예: `orchestrator/`, `services/`, `docker-compose.yml`), 이 섹션과 진행 상황을 업데이트한다.
