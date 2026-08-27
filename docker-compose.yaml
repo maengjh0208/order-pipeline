@@ -64,6 +64,16 @@ services:
       postgres:
         condition: service_healthy
 
+  inventory-service:
+    build: ./inventory-service
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./inventory-service/src/:/app/src
+    depends_on:
+      kafka:
+        condition: service_started
 
 volumes:
   postgres_data:
