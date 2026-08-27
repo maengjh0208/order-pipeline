@@ -32,6 +32,8 @@ async def handle_events_inventory(event: dict, producer: Producer) -> None:
             })
         )
         producer.flush()
+
+        print(f"{Topic.COMMANDS_PAYMENT} 처리")
     elif action == "RESERVE" and result == "OUT_OF_STOCK":
         await orders.update_status(order_id, OrderStatus.INVENTORY_FAILED)
         await orders.update_status(order_id, OrderStatus.CANCELLED)
@@ -55,6 +57,7 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
             value=json.dumps({"order_id": order_id})
         )
         producer.flush()
+        print(f"{Topic.COMMANDS_NOTIFICATION} 처리")
     elif result == "FAILED":
         await orders.update_status(order_id, OrderStatus.PAYMENT_FAILED)
 
@@ -70,6 +73,7 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
                 })
             )
             producer.flush()
+            print(f"{Topic.COMMANDS_PAYMENT} 처리")
         else:
             await orders.update_status(order_id, OrderStatus.PAYMENT_FAILED_DLQ)
             producer.produce(Topic.DLQ_PAYMENT, key=order_id, value=json.dumps(event))
@@ -83,6 +87,7 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
                 })
             )
             producer.flush()
+            print(f"{Topic.COMMANDS_INVENTORY} 처리")
             await orders.update_status(order_id, OrderStatus.COMPENSATING_INVENTORY)
 
     print(f"{Topic.EVENTS_PAYMENT} 수신: order_id={order_id}, attempt={attempt}, result={result}")
