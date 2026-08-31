@@ -1,6 +1,19 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
 
+export const FAILING_CARD_NUMBER = "4000000000000002";
+export const LOW_STOCK_PRODUCT_ID = "p2";
+
+const SEED_PRODUCTS = [
+  { product_id: "p1", product_name: "무선 이어폰", stock: 50, demo_note: null },
+  {
+    product_id: LOW_STOCK_PRODUCT_ID,
+    product_name: "한정판 스니커즈",
+    stock: 1,
+    demo_note: "재고 1개 — 두 번째 주문부터 품절 시연",
+  },
+];
+
 export function createApp({ stepDelayMs = 500 } = {}) {
   const app = express();
 
@@ -20,20 +33,25 @@ export function createApp({ stepDelayMs = 500 } = {}) {
 
   app.use(express.json());
 
+  const products = SEED_PRODUCTS.map((p) => ({ ...p }));
   const orders = new Map();
   const orderSubscribers = new Map(); // order_id -> Set<res>
   let nextEventId = 1;
 
-  function recordEvent(order, sagaStep, fromStatus, toStatus) {
+  function findProduct(productId) {
+    return products.find((p) => p.product_id === productId);
+  }
+
+  function recordEvent(order, sagaStep, fromStatus, toStatus, attempt, maxAttempts, reason) {
     const event = {
       event_id: String(nextEventId++),
       order_id: order.order_id,
       saga_step: sagaStep,
       from_status: fromStatus,
       to_status: toStatus,
-      attempt: 0,
-      max_attempts: 0,
-      reason: null,
+      attempt,
+      max_attempts: maxAttempts,
+      reason,
       occurred_at: new Date().toISOString(),
     };
     order.current_status = toStatus;
@@ -42,8 +60,8 @@ export function createApp({ stepDelayMs = 500 } = {}) {
       from_status: fromStatus,
       to_status: toStatus,
       occurred_at: event.occurred_at,
-      reason: null,
-      attempt: 0,
+      reason,
+      attempt,
     });
 
     const subs = orderSubscribers.get(order.order_id);
@@ -60,21 +78,68 @@ export function createApp({ stepDelayMs = 500 } = {}) {
   }
 
   async function runSaga(order) {
-    recordEvent(order, "INVENTORY", "CREATED", "INVENTORY_RESERVING");
+    // 1. 재고 확인
+    recordEvent(order, "INVENTORY", "CREATED", "INVENTORY_RESERVING", 0, 0, null);
     await delay(stepDelayMs);
 
-    recordEvent(order, "INVENTORY", "INVENTORY_RESERVING", "INVENTORY_RESERVED");
-    recordEvent(order, "INVENTORY", "INVENTORY_RESERVED", "PAYMENT_PROCESSING");
-    await delay(stepDelayMs);
+    const item = order.items[0];
+    const product = findProduct(item.product_id);
+    if (product.stock < item.quantity) {
+      recordEvent(order, "INVENTORY", "INVENTORY_RESERVING", "INVENTORY_FAILED", 0, 0, "out_of_stock");
+      // INVENTORY_FAILED 배너("재고가 부족합니다")가 화면에 그려질 시간을 주고 나서 최종 취소로 넘어간다.
+      // delay 없이 바로 이어지면 SSE 이벤트 두 개가 거의 동시에 도착해 배너가 안 보이고 CANCELLED로 건너뛰어 보인다.
+      await delay(stepDelayMs);
+      recordEvent(order, "INVENTORY", "INVENTORY_FAILED", "CANCELLED", 0, 0, "out_of_stock");
+      return;
+    }
+    product.stock -= item.quantity;
+    recordEvent(order, "INVENTORY", "INVENTORY_RESERVING", "INVENTORY_RESERVED", 0, 0, null);
+    recordEvent(order, "INVENTORY", "INVENTORY_RESERVED", "PAYMENT_PROCESSING", 0, 0, null);
 
-    recordEvent(order, "PAYMENT", "PAYMENT_PROCESSING", "PAID");
-    await delay(stepDelayMs);
+    // 2. 결제 (최대 3회 시도)
+    const maxAttempts = 3;
+    let fromStatus = "PAYMENT_PROCESSING";
+    let paid = false;
 
-    recordEvent(order, "NOTIFICATION", "PAID", "NOTIFYING");
-    await delay(stepDelayMs);
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      await delay(stepDelayMs);
+      const shouldFail = order.card_number === FAILING_CARD_NUMBER || Math.random() < 0.1;
 
-    recordEvent(order, "NOTIFICATION", "NOTIFYING", "COMPLETED");
+      if (!shouldFail) {
+        recordEvent(order, "PAYMENT", fromStatus, "PAID", attempt, maxAttempts, null);
+        paid = true;
+        break;
+      }
+
+      recordEvent(order, "PAYMENT", fromStatus, "PAYMENT_FAILED", attempt, maxAttempts, "insufficient_funds");
+
+      if (attempt < maxAttempts) {
+        recordEvent(order, "PAYMENT", "PAYMENT_FAILED", "RETRYING_PAYMENT", attempt, maxAttempts, "insufficient_funds");
+        fromStatus = "RETRYING_PAYMENT";
+      } else {
+        recordEvent(order, "PAYMENT", "PAYMENT_FAILED", "PAYMENT_FAILED_DLQ", attempt, maxAttempts, "insufficient_funds");
+      }
+    }
+
+    if (!paid) {
+      recordEvent(order, "PAYMENT", "PAYMENT_FAILED_DLQ", "COMPENSATING_INVENTORY", maxAttempts, maxAttempts, "insufficient_funds");
+      await delay(stepDelayMs);
+      // 보상 트랜잭션: 실제 백엔드의 commands.inventory(action=RELEASE)에 해당 — 예약해뒀던 재고를 되돌린다.
+      product.stock += item.quantity;
+      recordEvent(order, "INVENTORY", "COMPENSATING_INVENTORY", "CANCELLED", 0, 0, "insufficient_funds");
+      return;
+    }
+
+    // 3. 알림
+    await delay(stepDelayMs);
+    recordEvent(order, "NOTIFICATION", "PAID", "NOTIFYING", 0, 0, null);
+    await delay(stepDelayMs);
+    recordEvent(order, "NOTIFICATION", "NOTIFYING", "COMPLETED", 0, 0, null);
   }
+
+  app.get("/products", (req, res) => {
+    res.json(products);
+  });
 
   app.post("/orders", (req, res) => {
     const { items, card_number } = req.body;
@@ -84,13 +149,21 @@ export function createApp({ stepDelayMs = 500 } = {}) {
       current_status: "CREATED",
       created_at: now,
       updated_at: now,
-      items,
+      items: items.map((i) => ({
+        product_id: i.product_id,
+        product_name: findProduct(i.product_id)?.product_name ?? i.product_id,
+        quantity: i.quantity,
+      })),
       card_number,
       history: [],
     };
     orders.set(order.order_id, order);
     res.status(201).json(order);
     runSaga(order);
+  });
+
+  app.get("/orders", (req, res) => {
+    res.json([...orders.values()]);
   });
 
   app.get("/orders/:id", (req, res) => {
