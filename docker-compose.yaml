@@ -96,6 +96,17 @@ services:
       inventory-postgres:
         condition: service_healthy
 
+  payment-service:
+    build: ./payment-service
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./payment-service/src/:/app/src
+    depends_on:
+      kafka:
+        condition: service_started
+
 volumes:
   order_postgres_data:
   inventory_postgres_data:

@@ -19,6 +19,8 @@ async def handle_events_inventory(event: dict, producer: Producer) -> None:
     action = event["action"]  # action: 무슨 작업을 요청했는지
     result = event["result"]  # result: 그 작업의 결과가 어떻게 됐는지
 
+    print(f"{Topic.EVENTS_INVENTORY} 수신: order_id={order_id}, action={action}, result={result}")
+
     if action == "RESERVE" and result == "RESERVED":
         await orders.update_status(order_id, OrderStatus.INVENTORY_RESERVED)
         await orders.update_status(order_id, OrderStatus.PAYMENT_PROCESSING)
@@ -27,7 +29,7 @@ async def handle_events_inventory(event: dict, producer: Producer) -> None:
             key=order_id,
             value=json.dumps({
                 "order_id": order_id,
-                "card_number": "4111111111111111",  # TODO: 일단은 임의 값
+                "card_number": "4000000000000002",  # TODO: 일단은 임의 값
                 "attempt": 1,
             })
         )
@@ -40,13 +42,13 @@ async def handle_events_inventory(event: dict, producer: Producer) -> None:
     elif action == "RELEASE" and result == "RELEASED":
         await orders.update_status(order_id, OrderStatus.CANCELLED)
 
-    print(f"{Topic.EVENTS_INVENTORY} 수신: order_id={order_id}, action={action}, result={result}")
-
 
 async def handle_events_payment(event: dict, producer: Producer) -> None:
     order_id = event["order_id"]
     result = event["result"]
     attempt = event["attempt"]
+
+    print(f"{Topic.EVENTS_PAYMENT} 수신: order_id={order_id}, attempt={attempt}, result={result}")
 
     if result == "PAID":
         await orders.update_status(order_id, OrderStatus.PAID)
@@ -68,7 +70,7 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
                 key=order_id,
                 value=json.dumps({
                     "order_id": order_id,
-                    "card_number": "4111111111111111",  # TODO: 일단은 임의 값
+                    "card_number": "4000000000000002",  # TODO: 일단은 임의 값
                     "attempt": attempt + 1,
                 })
             )
@@ -90,17 +92,15 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
             print(f"{Topic.COMMANDS_INVENTORY} 처리")
             await orders.update_status(order_id, OrderStatus.COMPENSATING_INVENTORY)
 
-    print(f"{Topic.EVENTS_PAYMENT} 수신: order_id={order_id}, attempt={attempt}, result={result}")
-
 
 async def handle_events_notification(event: dict, producer: Producer) -> None:
     order_id = event["order_id"]
     result = event["result"]
 
+    print(f"{Topic.EVENTS_NOTIFICATION} 수신: order_id={order_id}, result={result}")
+
     if result == "SENT":
         await orders.update_status(order_id, OrderStatus.COMPLETED)
-
-    print(f"{Topic.EVENTS_NOTIFICATION} 수신: order_id={order_id}, result={result}")
 
 
 def consume_events(producer: Producer, loop: asyncio.AbstractEventLoop) -> None:
