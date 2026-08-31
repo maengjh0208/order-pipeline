@@ -51,8 +51,9 @@
 - [x] `inventory-service` wave 1 (Kafka 연결 증명) 완료 — `commands.inventory` 구독해서 수신 로그 찍는 것까지 확인함
 - [x] `inventory-service` wave 2 (재고 로직 + PostgreSQL) 완료 — 아래 "inventory-service 상세" 참고. `RESERVE`/`RELEASE` 커맨드를 실제로 처리해 `events.inventory` 응답을 자동 발행, 오케스트레이터의 전체 사가를 Kafka UI 수동 개입 없이 실제 서비스 두 개만으로 end-to-end 검증함. 재고 저장소는 처음부터 PostgreSQL로(인메모리 단계 생략) — 원자적 UPDATE 설계 실습이 목적이었음
 - [x] `payment-service` 완료 — `PaymentProvider` 추상화(`MockPaymentProvider`: 고정 카드번호 `4000000000000002`는 항상 실패, 그 외 10% 랜덤 실패) 구현, `commands.payment` 처리해 `events.payment` 자동 발행 확인. DB 없음(무상태 서비스라 database-per-service 판단 결과 불필요) — 컨슈머 루프도 완전 동기(async 불필요, `inventory-service`와 달리 `asyncio.run` 자체가 없음)
-- [ ] `notification-service` — 아직 시작 안 함
-- 이 워커 서비스는 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통). 지금까지는 이 서비스가 없어서 Kafka UI로 응답 이벤트를 수동 발행해 오케스트레이터 로직을 검증해왔음
+- [x] `notification-service` 완료 — `commands.notification` 받으면 항상 `events.notification`(`SENT`)로 응답 (스펙대로 실패 경로 없음, 분기 자체가 없는 가장 단순한 서비스). DB 없음, 완전 동기.
+- **4개 서비스(오케스트레이터+inventory+payment+notification) 전부 갖춰짐 — `POST /orders` 한 번으로 Kafka UI 수동 개입 없이 `CREATED`부터 `COMPLETED`(또는 결제 실패 시 `CANCELLED`)까지 완전 자동 완주하는 것 확인함.** 이 프로젝트 1순위 목표(Saga Orchestration)가 실제 마이크로서비스로 end-to-end 증명된 마일스톤.
+  - 겪은 문제: 새 컨테이너/볼륨으로 처음 뜰 때 `events.payment`처럼 그 시점까지 한 번도 안 쓰인 토픽을 오케스트레이터가 구독 시도하면 다시 `UNKNOWN_TOPIC_OR_PART` 이슈 발생 (wave 2 상세 참고) — `payment-service`가 나중에 그 토픽에 처음 발행해 토픽이 생겨도 오케스트레이터는 5분간 재확인을 안 하므로, `docker compose restart order-saga-orchestrator`로 재구독해야 함. 여러 서비스를 한꺼번에 새로 띄울 때 반복될 수 있는 패턴이니 기억해둘 것.
 - [x] `order-saga-orchestrator` 주문 저장소 인메모리 → PostgreSQL 전환 완료 (아래 "백엔드 설계 결정" 참고) — `orders.py`/`main.py`/`saga.py` 전부 async DB 세션 기반으로 전환, 컨테이너 재시작 후에도 주문 상태가 유지되는 것 확인함 (첫 영속성 증명)
 - [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
 

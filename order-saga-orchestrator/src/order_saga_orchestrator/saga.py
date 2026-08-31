@@ -29,7 +29,7 @@ async def handle_events_inventory(event: dict, producer: Producer) -> None:
             key=order_id,
             value=json.dumps({
                 "order_id": order_id,
-                "card_number": "4000000000000002",  # TODO: 일단은 임의 값
+                "card_number": "4000000000000001",  # TODO: 일단은 임의 값
                 "attempt": 1,
             })
         )
@@ -70,7 +70,7 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
                 key=order_id,
                 value=json.dumps({
                     "order_id": order_id,
-                    "card_number": "4000000000000002",  # TODO: 일단은 임의 값
+                    "card_number": "4000000000000001",  # TODO: 일단은 임의 값
                     "attempt": attempt + 1,
                 })
             )
