@@ -30,7 +30,7 @@ services:
       kafka:
         condition: service_started
 
-  postgres:
+  order-postgres:
     image: postgres:16
     ports:
       - "5432:5432"
@@ -39,9 +39,25 @@ services:
       POSTGRES_PASSWORD: order_saga
       POSTGRES_DB: order_saga
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - order_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U order_saga -d order_saga" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  inventory-postgres:
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory
+      POSTGRES_DB: inventory
+    volumes:
+      - inventory_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U inventory -d inventory" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -52,7 +68,7 @@ services:
       - "8000:8000"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
-      DATABASE_URL: postgresql+asyncpg://order_saga:order_saga@postgres:5432/order_saga
+      DATABASE_URL: postgresql+asyncpg://order_saga:order_saga@order-postgres:5432/order_saga
       PYTHONUNBUFFERED: "1"
     volumes:
       - ./order-saga-orchestrator/src/:/app/src
@@ -61,19 +77,25 @@ services:
     depends_on:
       kafka:
         condition: service_started
-      postgres:
+      order-postgres:
         condition: service_healthy
 
   inventory-service:
     build: ./inventory-service
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      DATABASE_URL: postgresql+asyncpg://inventory:inventory@inventory-postgres:5432/inventory
       PYTHONUNBUFFERED: "1"
     volumes:
       - ./inventory-service/src/:/app/src
+      - ./inventory-service/alembic/:/app/alembic
+      - ./inventory-service/alembic.ini:/app/alembic.ini
     depends_on:
       kafka:
         condition: service_started
+      inventory-postgres:
+        condition: service_healthy
 
 volumes:
-  postgres_data:
+  order_postgres_data:
+  inventory_postgres_data:

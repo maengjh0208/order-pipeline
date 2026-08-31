@@ -1,3 +1,4 @@
+import asyncio
 import json
 from json import JSONDecodeError
 
@@ -8,7 +9,7 @@ from inventory_service.inventory import reserve, release
 from inventory_service.topics import Topic
 
 
-def handle_commands_inventory(event: dict, producer: Producer) -> None:
+async def handle_commands_inventory(event: dict, producer: Producer) -> None:
     order_id = event["order_id"]
     action = event["action"]
     items = event["items"]
@@ -17,14 +18,15 @@ def handle_commands_inventory(event: dict, producer: Producer) -> None:
     reason = None
 
     if action == "RESERVE":
-        if reserve(items):
+        try:
+            await reserve(items)
             result = "RESERVED"
             reason = None
-        else:
+        except ValueError:
             result = "OUT_OF_STOCK"
             reason = "out of stock"
     elif action == "RELEASE":
-        release(items)
+        await release(items)
         result = "RELEASED"
         reason = None
     else:
@@ -74,7 +76,7 @@ def main() -> None:
             except JSONDecodeError:
                 continue
 
-            handle_commands_inventory(event, producer)
+            asyncio.run(handle_commands_inventory(event, producer))
     finally:
         consumer.close()
 

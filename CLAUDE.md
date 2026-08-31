@@ -48,7 +48,8 @@
   - [x] 주문/사가 상태를 들고 있는 저장소 (인메모리, `orders.py`)
   - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
 - [x] 알림(`commands.notification`/`events.notification`, `PAID` → `NOTIFYING` → `COMPLETED`) 완료 — 스펙 3절 상태 머신이 이제 전부 구현됨 (`CREATED`부터 `COMPLETED`/`CANCELLED`까지 모든 경로)
-- [x] `inventory-service` wave 1 (Kafka 연결 증명) 완료 — `commands.inventory` 구독해서 수신 로그 찍는 것까지 확인함. 아직 재고 로직(재고 확인/차감, `events.inventory` 응답 발행)은 없음 — 다음 슬라이스에서 진행
+- [x] `inventory-service` wave 1 (Kafka 연결 증명) 완료 — `commands.inventory` 구독해서 수신 로그 찍는 것까지 확인함
+- [x] `inventory-service` wave 2 (재고 로직 + PostgreSQL) 완료 — 아래 "inventory-service 상세" 참고. `RESERVE`/`RELEASE` 커맨드를 실제로 처리해 `events.inventory` 응답을 자동 발행, 오케스트레이터의 전체 사가를 Kafka UI 수동 개입 없이 실제 서비스 두 개만으로 end-to-end 검증함. 재고 저장소는 처음부터 PostgreSQL로(인메모리 단계 생략) — 원자적 UPDATE 설계 실습이 목적이었음
 - [ ] `payment-service`, `notification-service` — 아직 시작 안 함
 - 이 워커 서비스들은 REST/FastAPI가 필요 없음 — Kafka `commands.*` 구독 + `events.*` 발행만 하는 단순 Python 프로세스로 충분 (스펙 2절: 서로 직접 모르고 커맨드/이벤트로만 소통). 지금까지는 이 서비스들이 없어서 Kafka UI로 응답 이벤트를 수동 발행해 오케스트레이터 로직을 검증해왔음
 - [x] `order-saga-orchestrator` 주문 저장소 인메모리 → PostgreSQL 전환 완료 (아래 "백엔드 설계 결정" 참고) — `orders.py`/`main.py`/`saga.py` 전부 async DB 세션 기반으로 전환, 컨테이너 재시작 후에도 주문 상태가 유지되는 것 확인함 (첫 영속성 증명)
@@ -85,6 +86,18 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 - `commands.inventory`의 `items`도 항상 빈 배열(`[]`)로 하드코딩 — 같은 이유
 - 순수 Python 코드 변경은 `docker compose up --build` 없이도 반영됨 — `./order-saga-orchestrator/src/`가 볼륨 마운트되어 있고 `uvicorn --reload`라서 자동 재시작됨. 리빌드는 `pyproject.toml`/`uv.lock`(의존성)이나 `Dockerfile`이 바뀔 때만 필요
 - `events.notification`처럼 **한 번도 안 쓰인 새 토픽**을 처음 구독할 때, 컨슈머가 뜬 시점에 토픽이 아직 없으면 `UNKNOWN_TOPIC_OR_PART` 이슈(wave 2 상세 참고)가 또 발생함 — Kafka UI로 메시지 발행해서 토픽 만든 뒤 `docker compose restart order-saga-orchestrator`로 재구독하면 해결
+
+### inventory-service 상세 (2026-08-27~31)
+
+`order-saga-orchestrator`와 달리 REST/FastAPI가 없는 순수 Kafka 워커 — `main()`이 메인 스레드에서 그냥 `while True` 폴링 루프를 도는 동기 스크립트라, 스레드↔이벤트루프 다리(`run_coroutine_threadsafe`)가 필요 없음. async DB 함수를 호출할 때는 메시지 하나당 `asyncio.run(handle_commands_inventory(...))`으로 그때그때 새 이벤트 루프를 만들었다 닫는 것으로 충분.
+
+- **database-per-service**: 오케스트레이터의 `order-postgres`와 완전히 별도인 `inventory-postgres` 컨테이너/볼륨 사용. 서비스 이름도 `postgres`(오케스트레이터) → `order-postgres`로, 신규는 `inventory-postgres`로 명확히 구분.
+- **`ProductModel`**: `id`는 UUID(`Uuid(as_uuid=False)`, `orders.py`의 `Order.id`와 같은 패턴), 식별자와 사람이 읽는 이름을 분리하기 위해 `product_name` 필드를 별도로 둠. 초기엔 `id`를 `"p1"`/`"p2"` 같은 짧은 문자열로 하려다, "식별자가 이름 역할까지 겸하는 건 안 좋다"는 논의로 UUID+이름 분리로 변경.
+  - 시드 데이터(`한정판 스니커즈` 재고 1개=품절 시연용, `기본 티셔츠` 재고 999개)는 스키마가 아니라 데이터라 Alembic 마이그레이션 파일 안에 `op.bulk_insert()`로 넣음.
+- **재고 예약/해제는 원자적 `UPDATE ... WHERE stock >= quantity`로 처리** (`inventory.py`). SELECT 후 UPDATE 두 단계로 하지 않고 한 문장으로 묶어서, 인스턴스가 여러 개여도 "둘 다 재고 있다고 착각"하는 lost-update를 원천 차단. `rowcount == 0`이면 재고 부족으로 판단해 `ValueError` 발생 → `get_session()`의 롤백이 트랜잭션 전체(이미 성공했던 다른 상품 차감분 포함)를 되돌림.
+  - **데드락 방지**: 여러 상품(`items`)을 처리할 때 `product_id` 기준으로 항상 정렬 후 순회. 이유: 트랜잭션 A가 `[p1, p2]` 순서로, 트랜잭션 B가 `[p2, p1]` 순서로 동시에 락을 걸면 서로가 서로의 완료를 기다리는 순환 대기(진짜 데드락, 언젠간 풀리는 단순 블로킹이 아님)가 생김 — Postgres가 감지해서 한쪽을 강제 실패시킴. 항상 같은 순서로 락을 걸면 이 순환 자체가 원천적으로 불가능해짐. `reserve`/`release` 둘 다 적용(액션 종류와 무관하게 같은 테이블 행에 락을 거는 이상 동일하게 필요).
+- **현재 한계**: `commands.inventory`의 `items`가 오케스트레이터에서 항상 빈 배열로 하드코딩되어 있어서(`saga.py` 참고), 지금은 `RESERVE`가 항상 성공(`RESERVED`)함 — `OUT_OF_STOCK` 경로는 아직 실증 못 함. 나중에 오케스트레이터가 실제 `product_id`/수량을 채워 보내려면, 그 UUID를 오케스트레이터가 어디서 알아내는지(재고 조회를 오케스트레이터가 대신 서빙할지, inventory-service에 직접 물어볼지)를 정해야 함 — `GET /products` 설계와 맞물린 열린 질문.
+- **볼륨 이름 변경 주의사항**: `postgres` 서비스를 `order-postgres`로 리네이밍하면서 볼륨명도 `postgres_data` → `order_postgres_data`로 바뀜 → Docker는 이름이 다르면 완전히 새 볼륨으로 취급해서, 기존 `orders` 테이블이 있던 데이터가 안 보이는 문제 발생(`UndefinedTableError`). 서비스/볼륨 이름을 바꾸면 새 볼륨에 마이그레이션을 다시 적용해야 함. 안 쓰는 옛 볼륨(`docker volume ls`로 확인)은 정리 필요.
 
 ### 프론트엔드 실행 순서 (예광탄 방식 적용)
 
