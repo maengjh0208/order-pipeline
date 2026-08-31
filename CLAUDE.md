@@ -38,7 +38,8 @@
 - [x] 프론트엔드 구현 계획 작성
 - [x] Notion에 요구사항/설계 문서 정리 (mermaid 다이어그램 포함)
 - [x] 프론트엔드 wave 1 (walking skeleton) 완료 — `feature/order-pipeline-frontend` 브랜치, 브라우저에서 주문 생성 → SSE로 상태가 실시간 갱신되는 것까지 확인함
-- [ ] 프론트엔드 wave 2~5 — 아래 "실행 순서" 참고
+- [x] 프론트엔드 wave 2(상태 머신 시각화, 주문 목록/생성/상세 페이지, 라우팅) 완료 — 아래 "wave 2 상세" 참고. 브라우저에서 주문 생성 → 상세 페이지 타임라인이 실시간으로 CREATED~COMPLETED까지 진행되는 것, 목록 페이지 반영까지 확인함
+- [ ] 프론트엔드 wave 3~5 — 아래 "실행 순서" 참고
 - [x] `order-saga-orchestrator` 백엔드 wave 1 (walking skeleton) 완료 — FastAPI `/health` 엔드포인트, uv(src 레이아웃), Dockerfile + `docker-compose.yaml`(src 볼륨 마운트로 핫리로드).
 - [x] `order-saga-orchestrator` 백엔드 wave 2 (Kafka 연결 증명) 완료 — 아래 "wave 2 상세" 참고. producer/consumer 둘 다 컨테이너 안 FastAPI 앱에서 직접 동작 확인함.
 - [x] `order-saga-orchestrator` 백엔드 wave 3 (핵심 사가 로직) 완료 — 아래 "wave 3 상세" 참고. 주문 생성 → 재고 예약 → 결제(성공/실패) → 재시도(최대 3회) → DLQ 적재 → 재고 보상 트랜잭션 → 취소, 전체 사가가 SSE로 실시간 관측되는 것까지 end-to-end 확인함. `/_debug/produce`는 삭제함.
@@ -106,8 +107,8 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 `docs/superpowers/plans/2026-08-18-order-pipeline-frontend.md`의 태스크 내용/코드는 그대로 목표로 유지하되, 실행 순서는 "가장 얇은 end-to-end 흐름부터"로 진행한다:
 
 1. **1차 (walking skeleton) — 완료**: 주문 생성 → SSE로 상태 텍스트가 실시간으로 바뀌는 것까지만. 재고부족/결제실패/재시도/DLQ/운영 대시보드/스타일링/라우팅 없음. 산출물: `src/types/order.ts`, `mock-server/`(성공 경로만, CORS 포함), `src/lib/api.ts`(fetchOrder/createOrder만), `src/hooks/useOrderStream.ts`(status만), `src/App.tsx`
-2. **2차**: 상태 머신 시각화(`OrderTimeline`), 주문 목록/생성 페이지, 라우팅(react-router) 정식 구현
-3. **3차**: mock 서버에 재고부족·결제실패·재시도·DLQ 시뮬레이션 추가
+2. **2차 — 완료**: 상태 머신 시각화(`OrderTimeline`), 주문 목록/생성 페이지, 라우팅(react-router) 정식 구현. 아래 "wave 2 상세" 참고
+3. **3차 — 완료**: mock 서버에 재고부족·결제실패·재시도·DLQ 시뮬레이션 추가. 아래 "wave 3 상세" 참고
 4. **4차**: 운영 대시보드(`useOpsStream`, `EventLogTable`, `MetricTile`)
 5. **5차**: SSE 재연결(Last-Event-ID) 복구, 테스트 보강, 마무리
 
@@ -117,9 +118,35 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 - mock 서버에 계획에 없던 CORS 미들웨어 추가 필요 — 브라우저 fetch/EventSource가 다른 origin(5173 ↔ 4000)이라 막혔던 걸 발견하고 수정함
 - 루트 `.gitignore`의 Python용 `lib/` 규칙이 `frontend/src/lib/`을 오탐지해서 예외 처리 추가함
 
-### wave 3 시작 전 처리할 것
+### wave 2 상세 (상태 시각화 + 페이지 + 라우팅, 2026-08-31)
 
-- 스펙 3절에 `PAYMENT_FAILED_DLQ → COMPENSATING_INVENTORY → CANCELLED`로 보상 트랜잭션 단계가 추가됨(재고 예약 해제). `docs/superpowers/plans/2026-08-18-order-pipeline-frontend.md`의 `OrderStatus` 타입(현재 11개로 기술됨)에 `COMPENSATING_INVENTORY`를 12번째로 추가해야 함 — Task 3 코드 블록, Global Constraints, `OrderTimeline`의 실패 라벨 매핑까지 같이 반영. mock 서버(Task 4)의 DLQ 시뮬레이션 로직도 이 단계를 거치도록 수정 필요.
+wave 1이 각 파일을 얇게(상태값만, 성공 경로만) 구현해뒀던 걸, 계획 문서의 Task 3/5/6/8/10/11/13 범위로 완성함. Task 4(mock 서버 전체 실패 시뮬레이션)·7/9/12(운영 대시보드)는 계획대로 wave 3~4로 계속 미룸.
+
+- **`types/order.ts`**: wave 1엔 `OrderStatus`(11개)만 있었는데, 실제론 이미 `SagaEvent`/`OrderItem`/`OrderHistoryEntry`/`Order`/`OpsSummary`/`isTerminalStatus`/`isFailureStatus`까지 다 구현되어 있었음 (계획 대비 가장 적게 남은 파일이었음). `PAYMENT_FAILED`, `COMPENSATING_INVENTORY` 두 값만 추가해 13개로 완성.
+- **`lib/api.ts`**: `fetchProducts`, `fetchOrders`, `fetchOpsSummary` 추가 (`fetchOrder`/`createOrder`는 wave 1 그대로).
+- **`useOrderStream` 버그 수정**: `initialStatus`를 `useState`의 초기값으로만 받다 보니, `OrderDetailPage`처럼 REST 쿼리(`fetchOrder`)가 비동기로 나중에 완료되는 경우 그 값을 훅이 영영 못 받아 "불러오는 중..."에서 멈추는 문제 발견. `useEffect`로 `initialStatus`가 바뀔 때 `status`가 아직 `null`이면(=SSE로 아직 아무 이벤트도 못 받았으면) 그 값을 채우도록 수정 — SSE가 이미 더 앞서갔으면 덮어쓰지 않음.
+- **`OrderTimeline` 버그 수정**: 원래 계획 코드의 `stepState`가 `STEPS`(핵심 5단계)에 없는 중간 상태(`INVENTORY_RESERVED`, `PAID`, `PAYMENT_FAILED` 등)를 만나면 진행 표시가 순간적으로 뒤로 되돌아가 보이는 문제가 있어서, 전체 13개 상태를 단계 번호로 매핑하는 `STAGE_INDEX`를 추가해 해결. `CANCELLED`는 별도 분기로 "완료"만 `pending`, 나머지는 전부 `done`으로 처리(완료를 거짓으로 활성 표시하지 않기 위함).
+- **고객용 `FAILURE_LABELS` 문구**: 브레인스토밍에서 "고객에게 내부 사가 용어를 보여줄 필요 없다"는 논의 끝에, `COMPENSATING_INVENTORY`를 "재고 복구 중"이 아니라 "주문을 취소 처리하고 있습니다"로, `PAYMENT_FAILED`는 배너 자체를 생략(재시도/DLQ 결정 직전 찰나라 깜빡임 방지)하기로 결정. 이 매핑은 `/ops`(기술적 세부사항 그대로 노출)와 고객용 화면의 표시 방식이 의도적으로 다르다는 설계 원칙의 실제 적용 사례.
+- **`NewOrderPage`의 `createOrder` 테스트**: `@tanstack/react-query` v5.101+에서 `mutationFn`이 실제 인자 외에 내부 컨텍스트 객체를 두 번째 인자로 같이 넘기도록 바뀜(계획 작성 시점엔 없던 동작) — 테스트의 `toHaveBeenCalledWith` 두 번째 인자를 `expect.anything()`으로 완화해서 라이브러리 내부 구현 세부사항에 안 얽매이게 함.
+- **`/ops` 라우트는 얇은 스텁**(`OpsDashboardPage` — "준비 중입니다")으로 먼저 걸어 라우팅 트리를 완성, 실제 로직은 wave 4에서 채움.
+- **mock 서버에 `GET /products`, `GET /orders`(목록) 추가** — wave 1엔 `POST /orders`/`GET /orders/:id`/SSE만 있어서 새로 만든 `OrderListPage`/`NewOrderPage`가 실제로 못 돌아갔음. 재시도/DLQ 시뮬레이션(Task 4 전체)은 여전히 wave 3으로 미루고, 지금 두 페이지가 필요로 하는 최소 엔드포인트만 추가. 상품 시드는 스펙 6절 데모 시나리오 그대로(`한정판 스니커즈` 재고 1개).
+- **브라우저로 직접 확인**: `POST /orders` → 상세 페이지 타임라인이 실시간으로 CREATED~COMPLETED까지 진행, 목록 페이지에 반영되는 것까지 확인함.
+
+### wave 3 상세 (mock 서버 실패 시뮬레이션, 2026-08-31)
+
+계획 문서 Task 4의 재고/결제 시뮬레이션 로직을 `mock-server/server.mjs`에 반영. `GET /ops/summary`, `GET /sse/ops`, Last-Event-ID 리플레이는 Task 4에 같이 있지만 실제로 소비하는 코드(운영 대시보드)가 아직 없어서 계속 wave 4/5로 미룸 — 지금 만든 건 재고부족/결제실패/재시도/DLQ/보상 트랜잭션 경로뿐.
+
+- **`FAILING_CARD_NUMBER`/`LOW_STOCK_PRODUCT_ID` export**, 상품 시드를 스펙 6절 그대로(`p1` 재고 50, `p2`=`한정판 스니커즈` 재고 1) 정리.
+- **결제 재시도 로직**: 매 시도마다 `card_number === FAILING_CARD_NUMBER`(결정론적 100% 실패) 또는 10% 랜덤 실패로 판정. 실패 시 `PAYMENT_FAILED` → (`attempt < 3`이면 `RETRYING_PAYMENT`, `attempt === 3`이면 바로 `PAYMENT_FAILED_DLQ`) — 오케스트레이터 `saga.py`와 동일한 분기 구조.
+- **계획 코드에 있던 버그 발견 및 수정 (보상 트랜잭션 미실행)**: 원래 계획의 `runSaga`는 `COMPENSATING_INVENTORY` 단계로 전이만 시킬 뿐 실제로 `product.stock`을 되돌리는 코드가 없었음 — 결제 실패 데모를 반복할수록 mock 재고가 영구히 줄어드는 버그. `PAYMENT_FAILED_DLQ → COMPENSATING_INVENTORY` 전이 시 `product.stock += item.quantity`를 실행하도록 추가해 실제 백엔드의 `RELEASE` 커맨드와 동일한 의미를 갖게 함 (테스트로 재고가 원상복구되는 것 검증).
+- **계획 코드에 있던 타이밍 버그 발견 및 수정 (재고부족 배너가 안 보임)**: `INVENTORY_FAILED`와 곧바로 이어지는 `CANCELLED` 사이에 `delay`가 없어서 두 SSE 이벤트가 거의 동시에 도착 — 브라우저에서 "재고가 부족합니다" 배너가 그려질 틈도 없이 "주문이 취소되었습니다"로 건너뛰어 보이는 문제를 사용자가 직접 발견함. 두 이벤트 사이에 `stepDelayMs`만큼 `delay` 추가로 해결.
+- **브라우저로 직접 확인**: 정상 완주, 랜덤 10% 재시도 후 성공(정상 카드로도 가끔 재시도 배너가 떴다 사라지는 게 스펙 6절의 의도된 "배경 노이즈"임을 확인), 재고부족(`재고가 부족합니다` → `주문이 취소되었습니다`), 결정론적 결제 실패 카드로 재시도 2회 → DLQ → 보상 트랜잭션 → 취소까지 전체 체인 전부 확인함.
+
+프론트 wave 2 시작 전, 계획 문서의 `OrderStatus`가 11개로 기술되어 있어 실제 백엔드(13개 — `PAYMENT_FAILED`, `COMPENSATING_INVENTORY` 누락)와 어긋나 있던 걸 발견해 수정함:
+- Global Constraints, `types/order.ts`의 `OrderStatus` 타입에 13개 값 모두 반영
+- mock 서버 DLQ 시뮬레이션이 `PAYMENT_FAILED`/`COMPENSATING_INVENTORY` 중간 단계 없이 곧장 다음 상태로 건너뛰던 걸, 실제 백엔드처럼 두 단계를 거치도록 수정
+- **고객용 `OrderTimeline`과 운영 대시보드는 상태를 보여주는 방식이 다르다**는 설계 결정을 명시적으로 문서화함: `/ops`는 13개 상태를 있는 그대로 노출(observability 목적)하지만, 고객용 타임라인은 정상 흐름 4단계(재고 확인/결제 처리/알림 발송/완료)를 항상 유지하고, 예외 상태만 순화된 배너 문구로 추가 노출 — `COMPENSATING_INVENTORY`("주문을 취소 처리하고 있습니다")처럼 내부 사가 용어(보상 트랜잭션 등)를 고객에게 그대로 노출하지 않음. `PAYMENT_FAILED`는 재시도/DLQ 결정 직전의 찰나의 상태라 배너 자체를 생략(깜빡임 방지).
+- `isFailureStatus`/`FAILURE_STATUSES`는 계획 문서 어디에서도 실제로 소비되지 않는 미사용 유틸임을 확인 — 운영 대시보드 통계(`useOpsStream`)는 이 함수를 안 쓰고 특정 상태값을 직접 비교해서 집계함. 지금은 그대로 두고, 나중에 이 유틸을 실제로 쓰는 코드가 생길 때 그 맥락에서 어떤 상태를 "실패"로 볼지 결정하기로 함.
 
 ## 백엔드 설계 결정
 

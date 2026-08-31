@@ -14,7 +14,7 @@
 
 - 프론트는 Kafka에 직접 접근하지 않고 오케스트레이터의 REST/SSE만 소비한다 (스펙 2절, 4절).
 - SSE 이벤트 payload는 `event_id, order_id, saga_step, from_status, to_status, attempt, max_attempts, reason, occurred_at` 필드를 가진 고정 스키마다 (스펙 4절).
-- 주문 상태값은 `CREATED, INVENTORY_RESERVING, INVENTORY_RESERVED, INVENTORY_FAILED, PAYMENT_PROCESSING, RETRYING_PAYMENT, PAYMENT_FAILED_DLQ, PAID, NOTIFYING, COMPLETED, CANCELLED` 11개로 고정한다 (스펙 3절).
+- 주문 상태값은 `CREATED, INVENTORY_RESERVING, INVENTORY_RESERVED, INVENTORY_FAILED, PAYMENT_PROCESSING, PAYMENT_FAILED, RETRYING_PAYMENT, PAYMENT_FAILED_DLQ, COMPENSATING_INVENTORY, PAID, NOTIFYING, COMPLETED, CANCELLED` 13개로 고정한다 (스펙 3절). 고객용 `OrderTimeline`은 이 13개를 그대로 다 보여주지 않고, 정상 흐름 4단계(재고 확인/결제 처리/알림 발송/완료)는 항상 유지하며 예외 상태만 순화된 배너 문구로 추가 노출한다 — 기술적 세부사항(보상 트랜잭션 등)은 운영 대시보드(`/ops`)에서만 그대로 드러낸다.
 - 전역 상태 라이브러리(Redux 등)는 쓰지 않는다. 서버 데이터는 TanStack Query, SSE 푸시는 React 기본 상태로 관리한다 (스펙 5절).
 - 결제 실패 데모 트리거 카드번호는 `4000000000000002`, 재고부족 데모 상품은 재고 1개로 시드한다 (스펙 6절).
 - 모든 사용자 대상 문자열(라벨, 버튼, 에러 메시지)은 한국어로 작성한다.
@@ -205,7 +205,7 @@ git commit -m "test: set up vitest and react testing library harness"
 
 **Interfaces:**
 - Produces:
-  - `type OrderStatus` (11개 값, Global Constraints 참고)
+  - `type OrderStatus` (13개 값, Global Constraints 참고)
   - `type SagaStep = "INVENTORY" | "PAYMENT" | "NOTIFICATION"`
   - `interface SagaEvent { event_id, order_id, saga_step, from_status, to_status, attempt, max_attempts, reason, occurred_at }`
   - `interface OrderItem { product_id: string; product_name: string; quantity: number }`
@@ -268,8 +268,10 @@ export type OrderStatus =
   | "INVENTORY_RESERVED"
   | "INVENTORY_FAILED"
   | "PAYMENT_PROCESSING"
+  | "PAYMENT_FAILED"
   | "RETRYING_PAYMENT"
   | "PAYMENT_FAILED_DLQ"
+  | "COMPENSATING_INVENTORY"
   | "PAID"
   | "NOTIFYING"
   | "COMPLETED"
@@ -579,16 +581,20 @@ export function createApp({ stepDelayMs = 500 } = {}) {
         break;
       }
 
+      recordEvent(order, "PAYMENT", fromStatus, "PAYMENT_FAILED", attempt, maxAttempts, "insufficient_funds");
+
       if (attempt < maxAttempts) {
-        recordEvent(order, "PAYMENT", fromStatus, "RETRYING_PAYMENT", attempt, maxAttempts, "insufficient_funds");
+        recordEvent(order, "PAYMENT", "PAYMENT_FAILED", "RETRYING_PAYMENT", attempt, maxAttempts, "insufficient_funds");
         fromStatus = "RETRYING_PAYMENT";
       } else {
-        recordEvent(order, "PAYMENT", fromStatus, "PAYMENT_FAILED_DLQ", attempt, maxAttempts, "insufficient_funds");
+        recordEvent(order, "PAYMENT", "PAYMENT_FAILED", "PAYMENT_FAILED_DLQ", attempt, maxAttempts, "insufficient_funds");
       }
     }
 
     if (!paid) {
-      recordEvent(order, "PAYMENT", "PAYMENT_FAILED_DLQ", "CANCELLED", maxAttempts, maxAttempts, "insufficient_funds");
+      recordEvent(order, "PAYMENT", "PAYMENT_FAILED_DLQ", "COMPENSATING_INVENTORY", maxAttempts, maxAttempts, "insufficient_funds");
+      await delay(stepDelayMs);
+      recordEvent(order, "INVENTORY", "COMPENSATING_INVENTORY", "CANCELLED", 0, 0, "insufficient_funds");
       return;
     }
 
@@ -1209,7 +1215,17 @@ describe("OrderTimeline", () => {
 
   it("shows a failure banner for CANCELLED", () => {
     render(<OrderTimeline currentStatus="CANCELLED" />);
-    expect(screen.getByTestId("failure-banner")).toHaveTextContent("주문 취소됨");
+    expect(screen.getByTestId("failure-banner")).toHaveTextContent("주문이 취소되었습니다");
+  });
+
+  it("shows a failure banner for COMPENSATING_INVENTORY without leaking internal saga terms", () => {
+    render(<OrderTimeline currentStatus="COMPENSATING_INVENTORY" />);
+    expect(screen.getByTestId("failure-banner")).toHaveTextContent("주문을 취소 처리하고 있습니다");
+  });
+
+  it("shows no failure banner for the transient PAYMENT_FAILED state", () => {
+    render(<OrderTimeline currentStatus="PAYMENT_FAILED" />);
+    expect(screen.queryByTestId("failure-banner")).not.toBeInTheDocument();
   });
 });
 ```
@@ -1234,11 +1250,14 @@ const STEPS: { status: OrderStatus; label: string }[] = [
   { status: "COMPLETED", label: "완료" },
 ];
 
+// 고객에게는 보상 트랜잭션 같은 내부 사가 용어를 노출하지 않는다 (기술적 세부사항은 /ops 대시보드 전용).
+// PAYMENT_FAILED는 재시도/DLQ 결정 직전의 찰나의 상태라 배너 없이 "결제 처리" 단계가 계속 활성으로 보이게 둔다.
 const FAILURE_LABELS: Partial<Record<OrderStatus, string>> = {
-  INVENTORY_FAILED: "재고 부족",
+  INVENTORY_FAILED: "재고가 부족합니다",
   RETRYING_PAYMENT: "결제 재시도 중",
-  PAYMENT_FAILED_DLQ: "결제 실패 (DLQ)",
-  CANCELLED: "주문 취소됨",
+  PAYMENT_FAILED_DLQ: "결제에 실패했습니다",
+  COMPENSATING_INVENTORY: "주문을 취소 처리하고 있습니다",
+  CANCELLED: "주문이 취소되었습니다",
 };
 
 type StepState = "done" | "active" | "pending";
@@ -2035,8 +2054,8 @@ cd frontend && npm run dev
 
 브라우저로 `http://localhost:5173` 접속해서 확인:
 1. "새 주문" 클릭 → 상품 `무선 이어폰` 선택, 카드번호 `4111111111111111` 입력 후 주문 → 상세 페이지로 이동하며 타임라인이 CREATED → ... → COMPLETED로 실시간 진행되는지 확인
-2. 다시 새 주문에서 `한정판 스니커즈`를 두 번째로 주문 → `재고 부족` 배너가 뜨는지 확인
-3. 카드번호 `4000000000000002`로 주문 → `결제 재시도 중`이 attempt 1/3, 2/3로 올라가다 `결제 실패 (DLQ)`로 종결되는지 확인
+2. 다시 새 주문에서 `한정판 스니커즈`를 두 번째로 주문 → `재고가 부족합니다` 배너가 뜨는지 확인
+3. 카드번호 `4000000000000002`로 주문 → `결제 재시도 중`이 attempt 1/3, 2/3로 올라가다 `결제에 실패했습니다` → `주문을 취소 처리하고 있습니다` → `주문이 취소되었습니다`로 종결되는지 확인
 4. `/ops` 방문 → 위 시나리오들이 실시간 이벤트 로그와 통계 타일에 반영되는지 확인
 
 Expected: 위 4가지 시나리오가 모두 화면에 반영됨. 문제가 있으면 이 태스크를 완료로 표시하지 않는다.
