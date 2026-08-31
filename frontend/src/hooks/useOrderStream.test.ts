@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import { useOrderStream } from "./useOrderStream";
 import { MockEventSource } from "../test-utils/mockEventSource";
+import type { OrderStatus } from "../types/order";
 
 beforeEach(() => {
   MockEventSource.instances = [];
@@ -49,5 +50,44 @@ describe("useOrderStream", () => {
     const source = MockEventSource.instances[0];
     unmount();
     expect(source.closed).toBe(true);
+  });
+
+  it("adopts initialStatus once it arrives after mount (e.g. from an async REST query)", async () => {
+    const { result, rerender } = renderHook(
+      ({ initialStatus }: { initialStatus: OrderStatus | null }) => useOrderStream("o1", initialStatus),
+      { initialProps: { initialStatus: null as OrderStatus | null } }
+    );
+
+    expect(result.current.status).toBeNull();
+
+    rerender({ initialStatus: "PAYMENT_PROCESSING" });
+
+    await waitFor(() => expect(result.current.status).toBe("PAYMENT_PROCESSING"));
+  });
+
+  it("does not let a late initialStatus override a status already advanced by SSE", async () => {
+    const { result, rerender } = renderHook(
+      ({ initialStatus }: { initialStatus: OrderStatus | null }) => useOrderStream("o1", initialStatus),
+      { initialProps: { initialStatus: null as OrderStatus | null } }
+    );
+    const source = MockEventSource.instances[0];
+
+    act(() => {
+      source.emit({
+        event_id: "1",
+        order_id: "o1",
+        saga_step: "INVENTORY",
+        from_status: "CREATED",
+        to_status: "INVENTORY_RESERVING",
+        attempt: 0,
+        max_attempts: 0,
+        reason: null,
+        occurred_at: "2026-08-18T00:00:00Z",
+      });
+    });
+
+    rerender({ initialStatus: "CREATED" });
+
+    expect(result.current.status).toBe("INVENTORY_RESERVING");
   });
 });

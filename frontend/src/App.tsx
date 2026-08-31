@@ -1,33 +1,27 @@
-import { useState } from "react";
-import { createOrder } from "./lib/api";
-import { useOrderStream } from "./hooks/useOrderStream";
-import type { Order } from "./types/order";
+import { BrowserRouter, Link, Route, Routes } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { OrderListPage } from "./pages/OrderListPage";
+import { NewOrderPage } from "./pages/NewOrderPage";
+import { OrderDetailPage } from "./pages/OrderDetailPage";
+import { OpsDashboardPage } from "./pages/OpsDashboardPage";
 
-function App() {
-  const [order, setOrder] = useState<Order | null>(null);
-  const { status } = useOrderStream(order?.order_id ?? "", order?.current_status ?? null);
+const queryClient = new QueryClient();
 
-  async function handleCreateOrder() {
-    const created = await createOrder({
-      items: [{ product_id: "p1", quantity: 1 }],
-      card_number: "4111111111111111",
-    });
-    setOrder(created);
-  }
-
+export function App() {
   return (
-    <div>
-      <h1>주문 파이프라인 (wave 1)</h1>
-      <button type="button" onClick={handleCreateOrder}>
-        주문 생성
-      </button>
-      {order && (
-        <p>
-          주문 <code>{order.order_id}</code> 상태: <strong>{status}</strong>
-        </p>
-      )}
-    </div>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <nav>
+          <Link to="/">주문 목록</Link>
+          <Link to="/ops">운영 대시보드</Link>
+        </nav>
+        <Routes>
+          <Route path="/" element={<OrderListPage />} />
+          <Route path="/orders/new" element={<NewOrderPage />} />
+          <Route path="/orders/:orderId" element={<OrderDetailPage />} />
+          <Route path="/ops" element={<OpsDashboardPage />} />
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 }
-
-export default App;

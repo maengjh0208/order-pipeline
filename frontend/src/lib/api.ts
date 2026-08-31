@@ -1,4 +1,11 @@
-import type { Order } from "../types/order";
+import type { Order, OpsSummary } from "../types/order";
+
+export interface Product {
+  product_id: string;
+  product_name: string;
+  stock: number;
+  demo_note: string | null;
+}
 
 export interface CreateOrderInput {
   items: { product_id: string; quantity: number }[];
@@ -13,8 +20,20 @@ async function getJson<T>(path: string): Promise<T> {
   return res.json();
 }
 
+export function fetchProducts(): Promise<Product[]> {
+  return getJson<Product[]>("/products");
+}
+
+export function fetchOrders(): Promise<Order[]> {
+  return getJson<Order[]>("/orders");
+}
+
 export function fetchOrder(orderId: string): Promise<Order> {
   return getJson<Order>(`/orders/${orderId}`);
+}
+
+export function fetchOpsSummary(): Promise<OpsSummary> {
+  return getJson<OpsSummary>("/ops/summary");
 }
 
 export async function createOrder(input: CreateOrderInput): Promise<Order> {

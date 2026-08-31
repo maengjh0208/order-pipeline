@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchOrder, createOrder } from "./api";
+import { fetchOrder, createOrder, fetchProducts } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -37,5 +37,16 @@ describe("createOrder", () => {
       items: [{ product_id: "p1", quantity: 1 }],
       card_number: "4111",
     });
+  });
+});
+
+describe("fetchProducts", () => {
+  it("returns the product list", async () => {
+    const mockProducts = [{ product_id: "p1", product_name: "이어폰", stock: 10, demo_note: null }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => mockProducts }));
+
+    const result = await fetchProducts();
+
+    expect(result).toEqual(mockProducts);
   });
 });
