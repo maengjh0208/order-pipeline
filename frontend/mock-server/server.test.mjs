@@ -106,6 +106,26 @@ describe("GET /orders", () => {
   });
 });
 
+describe("GET /ops/summary", () => {
+  it("returns zeroed counters when no orders exist", async () => {
+    const app = createApp({ stepDelayMs: 10 });
+    const res = await request(app).get("/ops/summary");
+    expect(res.body).toEqual({ total_orders: 0, retrying_count: 0, dlq_count: 0, success_rate: 0 });
+  });
+
+  it("reflects a completed order", async () => {
+    const app = createApp({ stepDelayMs: 10 });
+    await request(app)
+      .post("/orders")
+      .send({ items: [{ product_id: "p1", quantity: 1 }], card_number: "4111111111111111" });
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const res = await request(app).get("/ops/summary");
+    expect(res.body).toEqual({ total_orders: 1, retrying_count: 0, dlq_count: 0, success_rate: 1 });
+  });
+});
+
 describe("CORS", () => {
   it("allows cross-origin requests from the Vite dev server", async () => {
     const app = createApp({ stepDelayMs: 10 });

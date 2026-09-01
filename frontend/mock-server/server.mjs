@@ -36,6 +36,7 @@ export function createApp({ stepDelayMs = 500 } = {}) {
   const products = SEED_PRODUCTS.map((p) => ({ ...p }));
   const orders = new Map();
   const orderSubscribers = new Map(); // order_id -> Set<res>
+  const opsSubscribers = new Set(); // /sse/ops 구독자 (전체 이벤트를 필터링 없이 흘려보냄)
   let nextEventId = 1;
 
   function findProduct(productId) {
@@ -65,12 +66,13 @@ export function createApp({ stepDelayMs = 500 } = {}) {
     });
 
     const subs = orderSubscribers.get(order.order_id);
-    if (subs) {
-      for (const res of subs) {
-        res.write(`id: ${event.event_id}\n`);
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
-      }
-    }
+    if (subs) for (const res of subs) sendEvent(res, event);
+    for (const res of opsSubscribers) sendEvent(res, event);
+  }
+
+  function sendEvent(res, event) {
+    res.write(`id: ${event.event_id}\n`);
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
   }
 
   function delay(ms) {
@@ -172,6 +174,19 @@ export function createApp({ stepDelayMs = 500 } = {}) {
     res.json(order);
   });
 
+  app.get("/ops/summary", (req, res) => {
+    const all = [...orders.values()];
+    const completed = all.filter((o) => o.current_status === "COMPLETED").length;
+    const cancelled = all.filter((o) => o.current_status === "CANCELLED").length;
+    const finished = completed + cancelled;
+    res.json({
+      total_orders: all.length,
+      retrying_count: all.filter((o) => o.current_status === "RETRYING_PAYMENT").length,
+      dlq_count: all.filter((o) => o.history.some((h) => h.to_status === "PAYMENT_FAILED_DLQ")).length,
+      success_rate: finished > 0 ? completed / finished : 0,
+    });
+  });
+
   app.get("/sse/orders/:orderId", (req, res) => {
     res.set({
       "Content-Type": "text/event-stream",
@@ -186,6 +201,20 @@ export function createApp({ stepDelayMs = 500 } = {}) {
 
     req.on("close", () => {
       orderSubscribers.get(orderId)?.delete(res);
+    });
+  });
+
+  app.get("/sse/ops", (req, res) => {
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.flushHeaders();
+
+    opsSubscribers.add(res);
+    req.on("close", () => {
+      opsSubscribers.delete(res);
     });
   });
 
