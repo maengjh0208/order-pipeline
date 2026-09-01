@@ -109,7 +109,7 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 1. **1차 (walking skeleton) — 완료**: 주문 생성 → SSE로 상태 텍스트가 실시간으로 바뀌는 것까지만. 재고부족/결제실패/재시도/DLQ/운영 대시보드/스타일링/라우팅 없음. 산출물: `src/types/order.ts`, `mock-server/`(성공 경로만, CORS 포함), `src/lib/api.ts`(fetchOrder/createOrder만), `src/hooks/useOrderStream.ts`(status만), `src/App.tsx`
 2. **2차 — 완료**: 상태 머신 시각화(`OrderTimeline`), 주문 목록/생성 페이지, 라우팅(react-router) 정식 구현. 아래 "wave 2 상세" 참고
 3. **3차 — 완료**: mock 서버에 재고부족·결제실패·재시도·DLQ 시뮬레이션 추가. 아래 "wave 3 상세" 참고
-4. **4차**: 운영 대시보드(`useOpsStream`, `EventLogTable`, `MetricTile`)
+4. **4차 — 완료**: 운영 대시보드(`useOpsStream`, `EventLogTable`, `MetricTile`). 아래 "wave 4 상세" 참고
 5. **5차**: SSE 재연결(Last-Event-ID) 복구, 테스트 보강, 마무리
 
 ### wave 1에서 계획 문서와 달라진 점 (참고용)
@@ -142,11 +142,21 @@ wave 1이 각 파일을 얇게(상태값만, 성공 경로만) 구현해뒀던 �
 - **계획 코드에 있던 타이밍 버그 발견 및 수정 (재고부족 배너가 안 보임)**: `INVENTORY_FAILED`와 곧바로 이어지는 `CANCELLED` 사이에 `delay`가 없어서 두 SSE 이벤트가 거의 동시에 도착 — 브라우저에서 "재고가 부족합니다" 배너가 그려질 틈도 없이 "주문이 취소되었습니다"로 건너뛰어 보이는 문제를 사용자가 직접 발견함. 두 이벤트 사이에 `stepDelayMs`만큼 `delay` 추가로 해결.
 - **브라우저로 직접 확인**: 정상 완주, 랜덤 10% 재시도 후 성공(정상 카드로도 가끔 재시도 배너가 떴다 사라지는 게 스펙 6절의 의도된 "배경 노이즈"임을 확인), 재고부족(`재고가 부족합니다` → `주문이 취소되었습니다`), 결정론적 결제 실패 카드로 재시도 2회 → DLQ → 보상 트랜잭션 → 취소까지 전체 체인 전부 확인함.
 
+### 프론트엔드 계획 문서를 실제 백엔드(13개 상태)에 맞춰 보정 (2026-08-31)
+
 프론트 wave 2 시작 전, 계획 문서의 `OrderStatus`가 11개로 기술되어 있어 실제 백엔드(13개 — `PAYMENT_FAILED`, `COMPENSATING_INVENTORY` 누락)와 어긋나 있던 걸 발견해 수정함:
 - Global Constraints, `types/order.ts`의 `OrderStatus` 타입에 13개 값 모두 반영
 - mock 서버 DLQ 시뮬레이션이 `PAYMENT_FAILED`/`COMPENSATING_INVENTORY` 중간 단계 없이 곧장 다음 상태로 건너뛰던 걸, 실제 백엔드처럼 두 단계를 거치도록 수정
 - **고객용 `OrderTimeline`과 운영 대시보드는 상태를 보여주는 방식이 다르다**는 설계 결정을 명시적으로 문서화함: `/ops`는 13개 상태를 있는 그대로 노출(observability 목적)하지만, 고객용 타임라인은 정상 흐름 4단계(재고 확인/결제 처리/알림 발송/완료)를 항상 유지하고, 예외 상태만 순화된 배너 문구로 추가 노출 — `COMPENSATING_INVENTORY`("주문을 취소 처리하고 있습니다")처럼 내부 사가 용어(보상 트랜잭션 등)를 고객에게 그대로 노출하지 않음. `PAYMENT_FAILED`는 재시도/DLQ 결정 직전의 찰나의 상태라 배너 자체를 생략(깜빡임 방지).
 - `isFailureStatus`/`FAILURE_STATUSES`는 계획 문서 어디에서도 실제로 소비되지 않는 미사용 유틸임을 확인 — 운영 대시보드 통계(`useOpsStream`)는 이 함수를 안 쓰고 특정 상태값을 직접 비교해서 집계함. 지금은 그대로 두고, 나중에 이 유틸을 실제로 쓰는 코드가 생길 때 그 맥락에서 어떤 상태를 "실패"로 볼지 결정하기로 함.
+
+### wave 4 상세 (운영 대시보드, 2026-09-01)
+
+계획 문서 Task 7(`useOpsStream`)/9(`EventLogTable`+`MetricTile`)/12(`OpsDashboardPage`) 완성 + mock 서버에 `GET /ops/summary`, `GET /sse/ops` 추가. Last-Event-ID 리플레이(재연결 복구)는 여전히 wave 5로 미룸.
+
+- **`useOpsStream` 버그를 구현 전에 미리 발견하고 수정**: 계획 코드가 `OpsDashboardPage`에서 `useOpsStream(data ?? EMPTY_SUMMARY)`처럼 비동기 REST 쿼리 결과를 넘기는데, 훅 내부가 `useState(initialSummary)`로만 받아서 `OrderDetailPage` 때와 똑같은 버그(REST 응답이 늦게 도착하면 훅이 영영 못 받음)가 날 걸 미리 알아채 수정함. `hasReceivedEvent` ref로 "SSE가 이미 집계를 진행시켰는지"를 추적해서, 진행 중이면 뒤늦은 `initialSummary`가 덮어쓰지 않게 방어(useOrderStream의 `prev ?? initialStatus` 패턴과 같은 목적이지만, summary는 객체라 항상 truthy라 그 패턴을 못 쓰고 별도 플래그로 구현).
+- **mock 서버**: `recordEvent`가 주문별 구독자(`orderSubscribers`)뿐 아니라 전체 구독자(`opsSubscribers`)에게도 필터링 없이 브로드캐스트하도록 확장 (`sendEvent` 헬퍼로 중복 제거). `GET /ops/summary`는 현재 주문 스냅샷을 집계해서 반환.
+- **브라우저로 직접 확인**: `/ops` 초기 진입 시 통계 0으로 하이드레이션, 주문 생성/실패 시나리오가 실시간으로 통계 타일과 이벤트 로그에 반영되는 것까지 확인함.
 
 ## 백엔드 설계 결정
 
