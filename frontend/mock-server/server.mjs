@@ -37,6 +37,7 @@ export function createApp({ stepDelayMs = 500 } = {}) {
   const orders = new Map();
   const orderSubscribers = new Map(); // order_id -> Set<res>
   const opsSubscribers = new Set(); // /sse/ops 구독자 (전체 이벤트를 필터링 없이 흘려보냄)
+  const eventLog = []; // 지금까지 발생한 전체 이벤트 — 재연결 시 Last-Event-ID 리플레이용
   let nextEventId = 1;
 
   function findProduct(productId) {
@@ -65,6 +66,8 @@ export function createApp({ stepDelayMs = 500 } = {}) {
       attempt,
     });
 
+    eventLog.push(event);
+
     const subs = orderSubscribers.get(order.order_id);
     if (subs) for (const res of subs) sendEvent(res, event);
     for (const res of opsSubscribers) sendEvent(res, event);
@@ -73,6 +76,16 @@ export function createApp({ stepDelayMs = 500 } = {}) {
   function sendEvent(res, event) {
     res.write(`id: ${event.event_id}\n`);
     res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+
+  // 브라우저의 EventSource는 재연결할 때 마지막으로 받은 이벤트 id를 Last-Event-ID
+  // 헤더에 자동으로 실어 보낸다 (별도 프론트 코드 없이 네이티브로 동작). 서버는 그 id
+  // 이후에 발생한 이벤트만 골라 즉시 다시 보내주면, 끊긴 동안의 공백이 메워진다.
+  function replayFrom(lastEventId) {
+    if (!lastEventId) return [];
+    const index = eventLog.findIndex((e) => e.event_id === lastEventId);
+    if (index === -1) return [];
+    return eventLog.slice(index + 1);
   }
 
   function delay(ms) {
@@ -196,6 +209,9 @@ export function createApp({ stepDelayMs = 500 } = {}) {
     res.flushHeaders();
 
     const orderId = req.params.orderId;
+    const missed = replayFrom(req.get("Last-Event-ID")).filter((e) => e.order_id === orderId);
+    for (const event of missed) sendEvent(res, event);
+
     if (!orderSubscribers.has(orderId)) orderSubscribers.set(orderId, new Set());
     orderSubscribers.get(orderId).add(res);
 
@@ -211,6 +227,8 @@ export function createApp({ stepDelayMs = 500 } = {}) {
       Connection: "keep-alive",
     });
     res.flushHeaders();
+
+    for (const event of replayFrom(req.get("Last-Event-ID"))) sendEvent(res, event);
 
     opsSubscribers.add(res);
     req.on("close", () => {

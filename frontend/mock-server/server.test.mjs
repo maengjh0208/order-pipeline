@@ -1,6 +1,29 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
+import http from "node:http";
 import { createApp, FAILING_CARD_NUMBER, LOW_STOCK_PRODUCT_ID } from "./server.mjs";
+
+// SSE는 연결을 계속 열어두는 스트림이라 supertest의 "응답 끝날 때까지 기다리기" 방식으로는
+// 테스트하기 어렵다. 실제 포트에 잠깐 붙었다가 정해진 시간 뒤 연결을 끊고,
+// 그동안 받은 원시 텍스트를 그대로 돌려주는 헬퍼로 검증한다.
+function collectSSE(app, path, headers, durationMs) {
+  return new Promise((resolve) => {
+    const server = app.listen(0, () => {
+      const { port } = server.address();
+      const req = http.get({ port, path, headers }, (res) => {
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        setTimeout(() => {
+          req.destroy();
+          server.close();
+          resolve(data);
+        }, durationMs);
+      });
+    });
+  });
+}
 
 describe("POST /orders", () => {
   it("creates an order in CREATED status", async () => {
@@ -103,6 +126,35 @@ describe("GET /orders", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.some((o) => o.order_id === created.body.order_id)).toBe(true);
+  });
+});
+
+describe("SSE reconnection (Last-Event-ID replay)", () => {
+  it("replays events missed while disconnected, on /sse/orders/:orderId", async () => {
+    const app = createApp({ stepDelayMs: 30 });
+    const created = await request(app)
+      .post("/orders")
+      .send({ items: [{ product_id: "p1", quantity: 1 }], card_number: "4111111111111111" });
+    const orderId = created.body.order_id;
+
+    // 사가가 진행되는 동안 잠깐 붙어서 이벤트 몇 개만 받고 끊는다 (재연결 시나리오 흉내).
+    const firstChunk = await collectSSE(app, `/sse/orders/${orderId}`, {}, 40);
+    const firstIds = [...firstChunk.matchAll(/^id: (\d+)$/gm)].map((m) => m[1]);
+    expect(firstIds.length).toBeGreaterThan(0);
+    const lastSeenId = firstIds[firstIds.length - 1];
+
+    // 사가가 완전히 끝날 때까지 기다린 뒤, Last-Event-ID를 실어 재연결한다.
+    // 이 시점엔 새로 발생하는 이벤트가 없으므로, 뭔가 받는다면 그건 리플레이가 동작한다는 뜻이다.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const replayChunk = await collectSSE(
+      app,
+      `/sse/orders/${orderId}`,
+      { "Last-Event-ID": lastSeenId },
+      40
+    );
+
+    expect(replayChunk.length).toBeGreaterThan(0);
+    expect(replayChunk).not.toContain(`id: ${lastSeenId}\n`); // 이미 받은 것 자체는 다시 안 옴
   });
 });
 
