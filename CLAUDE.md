@@ -45,7 +45,7 @@
 - [x] `order-saga-orchestrator` 백엔드 wave 3 (핵심 사가 로직) 완료 — 아래 "wave 3 상세" 참고. 주문 생성 → 재고 예약 → 결제(성공/실패) → 재시도(최대 3회) → DLQ 적재 → 재고 보상 트랜잭션 → 취소, 전체 사가가 SSE로 실시간 관측되는 것까지 end-to-end 확인함. `/_debug/produce`는 삭제함.
   - [x] `POST /orders`, `GET /orders/{id}` — 스펙 4절 계약대로
   - [x] `GET /sse/orders/{order_id}` — 스펙 4절 계약대로
-  - [ ] `GET /orders`(목록), `GET /products`, `GET /ops/summary`, `GET /sse/ops` — 아직 미구현
+  - [ ] `GET /orders`(목록), `GET /products`, `GET /ops/summary`, `GET /sse/ops` — 아직 미구현. **다음에 이어갈 순서(2026-09-01 확정)**: (1) `GET /orders` 목록 먼저 — 이미 있는 `orders` 테이블 조회만 하면 됨, 가장 쉬움. (2) `GET /sse/ops` — `events.py`의 pub/sub이 이미 필터링 없이 전체 브로드캐스트하니 `/sse/orders/{id}`처럼 필터링만 안 하면 됨. (3) `GET /products`, `GET /ops/summary`는 설계 결정이 더 필요해서 순서상 뒤로 미룸 — `GET /products`는 "오케스트레이터가 상품 데이터를 어디서 가져오나"(예전에 정적 시드 데이터로 하기로 했던 논의 재확인 필요), `GET /ops/summary`는 지금 `orders` 테이블에 `id`/`status`만 있고 **상태 전이 이력이 전혀 없어서** `dlq_count`("이 주문이 한 번이라도 DLQ를 거쳤는가") 판단이 불가능함 — 새 테이블/컬럼이 필요한 설계 결정. mock 서버(`frontend/mock-server/server.mjs`)엔 이 4개 엔드포인트가 이미 다 구현되어 있으니 계약 참고용으로 쓸 것.
   - [x] 주문/사가 상태를 들고 있는 저장소 (인메모리, `orders.py`)
   - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
 - [x] 알림(`commands.notification`/`events.notification`, `PAID` → `NOTIFYING` → `COMPLETED`) 완료 — 스펙 3절 상태 머신이 이제 전부 구현됨 (`CREATED`부터 `COMPLETED`/`CANCELLED`까지 모든 경로)
@@ -110,7 +110,7 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 2. **2차 — 완료**: 상태 머신 시각화(`OrderTimeline`), 주문 목록/생성 페이지, 라우팅(react-router) 정식 구현. 아래 "wave 2 상세" 참고
 3. **3차 — 완료**: mock 서버에 재고부족·결제실패·재시도·DLQ 시뮬레이션 추가. 아래 "wave 3 상세" 참고
 4. **4차 — 완료**: 운영 대시보드(`useOpsStream`, `EventLogTable`, `MetricTile`). 아래 "wave 4 상세" 참고
-5. **5차**: SSE 재연결(Last-Event-ID) 복구, 테스트 보강, 마무리
+5. **5차 — 완료**: SSE 재연결(Last-Event-ID) 복구. 아래 "wave 5 상세" 참고. lint(`oxlint`)/빌드/전체 테스트(51개) 통과 확인 — 계획된 프론트엔드 5개 wave 전부 완료
 
 ### wave 1에서 계획 문서와 달라진 점 (참고용)
 
@@ -157,6 +157,13 @@ wave 1이 각 파일을 얇게(상태값만, 성공 경로만) 구현해뒀던 �
 - **`useOpsStream` 버그를 구현 전에 미리 발견하고 수정**: 계획 코드가 `OpsDashboardPage`에서 `useOpsStream(data ?? EMPTY_SUMMARY)`처럼 비동기 REST 쿼리 결과를 넘기는데, 훅 내부가 `useState(initialSummary)`로만 받아서 `OrderDetailPage` 때와 똑같은 버그(REST 응답이 늦게 도착하면 훅이 영영 못 받음)가 날 걸 미리 알아채 수정함. `hasReceivedEvent` ref로 "SSE가 이미 집계를 진행시켰는지"를 추적해서, 진행 중이면 뒤늦은 `initialSummary`가 덮어쓰지 않게 방어(useOrderStream의 `prev ?? initialStatus` 패턴과 같은 목적이지만, summary는 객체라 항상 truthy라 그 패턴을 못 쓰고 별도 플래그로 구현).
 - **mock 서버**: `recordEvent`가 주문별 구독자(`orderSubscribers`)뿐 아니라 전체 구독자(`opsSubscribers`)에게도 필터링 없이 브로드캐스트하도록 확장 (`sendEvent` 헬퍼로 중복 제거). `GET /ops/summary`는 현재 주문 스냅샷을 집계해서 반환.
 - **브라우저로 직접 확인**: `/ops` 초기 진입 시 통계 0으로 하이드레이션, 주문 생성/실패 시나리오가 실시간으로 통계 타일과 이벤트 로그에 반영되는 것까지 확인함.
+
+### wave 5 상세 (SSE 재연결, 2026-09-01)
+
+- **프론트엔드 쪽엔 재연결 코드가 필요 없음**: 브라우저 `EventSource`는 연결이 끊기면 자동 재시도하고, 서버가 `id:` 필드를 보낸 이벤트를 받은 적 있으면 재연결 시 `Last-Event-ID` 헤더를 자동으로 실어 보냄 (네이티브 스펙 동작). 우리 서버는 처음부터 `id: ${event_id}`를 보내고 있었으니, 서버가 그 헤더를 읽어서 놓친 이벤트를 되돌려주기만 하면 됨.
+- **mock 서버**: 전체 이벤트를 순서대로 담아두는 `eventLog` 배열 추가, `replayFrom(lastEventId)`로 그 이후 이벤트만 골라내는 함수 구현. `/sse/orders/:orderId`(주문별로 필터링), `/sse/ops`(필터링 없이 전체) 둘 다 연결 직후 `req.get("Last-Event-ID")`를 확인해 놓친 이벤트를 즉시 재전송하도록 연결.
+- **테스트 방법이 특이함**: SSE는 응답이 끝나지 않는 스트림이라, `supertest`의 "응답 완료까지 기다렸다가 검증" 방식이 안 맞음. `http.get()`으로 실제 임시 포트에 붙어서 일정 시간만 받고 연결을 끊는 `collectSSE` 헬퍼를 만들어, "사가 진행 중 잠깐 붙었다 끊기 → 완주할 때까지 대기 → Last-Event-ID로 재연결" 시나리오를 검증함.
+- 이걸로 계획된 프론트엔드 5개 wave(walking skeleton → 상태 시각화/페이지/라우팅 → 실패 시뮬레이션 → 운영 대시보드 → 재연결)가 전부 끝남. lint/빌드/전체 테스트(13개 파일, 51개 테스트) 통과 확인.
 
 ## 백엔드 설계 결정
 
