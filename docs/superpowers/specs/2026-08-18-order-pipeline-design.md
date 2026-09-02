@@ -152,10 +152,49 @@ CREATED
 | Method | Path | 구현 서비스 | 용도 |
 |---|---|---|---|
 | GET | `/products` | inventory-service | 주문 생성 폼에 표시할 상품 목록 (재고, 데모 트리거 라벨 포함) |
-| POST | `/orders` | order-saga-orchestrator | 주문 생성 |
-| GET | `/orders` | order-saga-orchestrator | 주문 목록 (고객 뷰) |
-| GET | `/orders/{id}` | order-saga-orchestrator | 주문 상세 + 상태 전이 히스토리 (SSE 연결 전 초기 하이드레이션) |
+| POST | `/orders` | order-saga-orchestrator | 주문 생성 (요청/응답 스키마·데이터 흐름은 4.1절) |
+| GET | `/orders` | order-saga-orchestrator | 주문 목록 (고객 뷰). `items` 포함, `card_number` 제외 |
+| GET | `/orders/{id}` | order-saga-orchestrator | 주문 상세 + 상태 전이 히스토리 (SSE 연결 전 초기 하이드레이션). `items` 포함, `card_number` 제외 |
 | GET | `/ops/summary` | order-saga-orchestrator | 운영 대시보드 초기 스냅샷 (총 주문수, 재시도 중 건수, DLQ 건수, 성공률) |
+
+### 4.1 `POST /orders` 요청/응답 스키마 및 데이터 흐름 (2026-09-02 확정)
+
+초기 walking skeleton에서는 `POST /orders`가 바디 없이 주문 하나를 만들고, 사가 내부에서 `card_number`와 `items`를 하드코딩했다. 이 절은 실제 주문 데이터(상품/수량/결제수단)가 프론트 → 오케스트레이터 → 하위 서비스로 흐르는 계약을 확정한다.
+
+**요청 바디**
+
+```json
+{
+  "items": [{ "product_id": "uuid", "quantity": 1 }],
+  "card_number": "4111111111111111"
+}
+```
+
+- `product_id`: 프론트가 `GET /products`(inventory-service)로 이미 조회한 값을 그대로 담는다. 오케스트레이터는 이 UUID를 자체적으로 알아낼 필요가 없다.
+- `items`는 최소 1개, 각 `quantity >= 1` — 신뢰 경계이므로 오케스트레이터가 요청 스키마(Pydantic)로 검증하고, 위반 시 `422`를 반환한다.
+- `card_number`: 결제 시뮬레이션 트리거(6절). 형식 검증은 하지 않는다(mock provider가 규칙 기반으로 성공/실패만 판단).
+
+**응답 바디** — 생성된 주문. `card_number`는 응답에 포함하지 않는다 (아래 "결제수단 저장" 참고). `GET /orders`, `GET /orders/{id}`도 동일하게 `items`는 노출하고 `card_number`는 제외한다.
+
+```json
+{ "id": "uuid", "status": "INVENTORY_RESERVING", "items": [{ "product_id": "uuid", "quantity": 1 }] }
+```
+
+**오케스트레이터는 상품 존재 여부/재고를 미리 검증하지 않는다.** 요청의 `items`를 그대로 `commands.inventory`(`action: RESERVE`)에 실어보내고, 판정은 전적으로 inventory-service에 맡긴다.
+
+- 재고 부족: 원자적 `UPDATE ... WHERE stock >= quantity`의 `rowcount == 0` → `events.inventory` `result: OUT_OF_STOCK`
+- 존재하지 않는 `product_id`: 매칭되는 행이 없어 역시 `rowcount == 0` → 동일하게 `OUT_OF_STOCK`으로 처리된다 (별도의 "상품 없음" 결과값은 두지 않는다 — 사가 관점에서 둘 다 "예약 불가"로 같게 취급하면 충분하다)
+
+이렇게 하는 이유는 2절의 원칙과 같다: 오케스트레이터에서 inventory-service로 가는 동기 REST 홉(재고 조회용)을 새로 만들면, inventory-service 장애가 주문 생성 경로까지 전파되는 지점이 생긴다. 재고 판정은 어차피 Kafka 커맨드/이벤트 왕복으로 한 번 하므로, 그 앞에 검증용 홉을 덧대지 않는다.
+
+**`items`·`card_number`는 주문에 영속화한다.** 사가는 최초 생성 이후 단계에서도 이 값들이 필요하다:
+
+- `card_number`: 결제 재시도 시 `saga.py`가 `commands.payment`를 `attempt`만 올려 재발행한다 → 매 재시도마다 카드번호가 필요하다.
+- `items`: 결제 최종 실패 시 보상 트랜잭션(`commands.inventory` `action: RELEASE`)으로 **예약했던 그 수량 그대로** 되돌려야 한다 → `COMPENSATING_INVENTORY` 단계에서 필요하다.
+
+따라서 두 값을 주문 레코드에 저장하고, `saga.py`의 핸들러들이 `order_id`로 주문을 다시 읽어 사용한다 (현재의 하드코딩 상수를 대체).
+
+**결제수단 저장 — 보안 주석.** 이 프로젝트는 mock 결제이고 카드번호는 Stripe 테스트 카드 컨벤션을 차용한 시연용 값이라, 주문 레코드에 평문으로 저장한다. **실제 운영 시스템이라면** 카드번호(PAN)를 자사 DB에 저장하지 않는다 — PG(결제대행사) 경계에서 토큰화하고 그 토큰만 보관하며, 재시도도 토큰으로 한다(PCI-DSS). 이 스펙은 그 경계 설계를 실제로 구현하지는 않되, 저장하고 있다는 사실과 실제 환경에서의 처리 방식을 명시해 둔다.
 
 **SSE (실시간 갱신)**
 
