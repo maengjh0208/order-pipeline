@@ -10,5 +10,7 @@ RUN uv sync --frozen --no-install-project
 COPY ./src ./src
 RUN uv sync --frozen
 
-CMD ["uv", "run", "python", "-m", "inventory_service.main"]
+EXPOSE 8000
+
+CMD ["uv", "run", "uvicorn", "inventory_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 

@@ -1,8 +1,14 @@
-# 인메모리 재고 딕셔너리와 예약/해제 함수
-from sqlalchemy import update
+from pydantic import BaseModel
+from sqlalchemy import update, select
 
 from inventory_service.db import get_session
 from inventory_service.models import ProductModel
+
+
+class Product(BaseModel):
+    id: str
+    product_name: str
+    stock: int
 
 
 # 재고 차감할 때 두 단계(SELECT 후 UPDATE)로 하지 않고, "UDPATE ... WHERE stock >= 수량" 한번으로 묶는다.
@@ -40,3 +46,11 @@ async def release(items: list[dict]) -> None:
             )
 
             await session.execute(query)
+
+
+async def get_products() -> list[Product]:
+    async with get_session() as session:
+        result = await session.execute(select(ProductModel))
+        rows = result.scalars().all()
+
+        return [Product(id=row.id, product_name=row.product_name, stock=row.stock) for row in rows]

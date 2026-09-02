@@ -27,6 +27,8 @@ Saga 패턴 중 **Orchestration 방식**을 채택한다. 중앙 `order-saga-orc
 ```
 [Client: React, SSE 구독]
         │
+        ├──GET /products (조회 전용)──▶ [inventory-service]
+        │
         ▼
 [order-saga-orchestrator] ──command──▶ [inventory-service]
    (FastAPI, 상태 보유)   ◀──event───
@@ -50,6 +52,8 @@ Kafka 토픽:
 - 대가로 오케스트레이터가 SPOF이자 복잡도를 떠안는 컴포넌트가 되지만, 1~2주 범위의 포트폴리오에서는 이 트레이드오프가 적절하다고 판단
 
 각 하위 서비스(inventory/payment/notification)는 커맨드 토픽을 구독해 처리하고 결과를 이벤트 토픽에 발행하는 단순한 워커로, 서로를 직접 알지 못한다.
+
+**예외: `GET /products`는 오케스트레이터를 거치지 않고 프론트가 `inventory-service`에 직접 REST로 조회한다** (2026-09-01 결정). 원래는 오케스트레이터가 정적 시드 데이터를 노출하는 안을 검토했으나, 그러면 실제 재고(DB)와 별개로 움직이는 가짜 스냅샷이 되는 문제가 있었다. `inventory-service`가 이미 재고의 진짜 소스(PostgreSQL)를 갖고 있으므로, 오케스트레이터가 프록시로 한 번 더 감싸는 대신 프론트가 직접 물어보게 했다 — 그 프록시 경로를 넣으면 `inventory-service`가 죽었을 때 오케스트레이터의 멀쩡한 다른 엔드포인트까지 실패 전파 위험이 생기기 때문이다. 이 프로젝트 규모(서비스 4개)에서는 API 게이트웨이로 오케스트레이터를 통일하는 이점보다, 불필요한 홉과 장애 전파 지점을 없애는 이점이 크다고 판단했다. `commands.inventory`/`events.inventory`(쓰기, Kafka 비동기)와 `GET /products`(읽기, REST 동기)가 같은 서비스 안에서 공존하는 것은 CQRS 스타일의 read/write 경로 분리로 볼 수 있다. `inventory-service`는 이 결정으로 순수 Kafka 워커에서 "Kafka 워커 + 조회용 FastAPI 서버"로 역할이 확장된다.
 
 ### 2.1 Kafka 메시지 스키마 (백엔드 서비스 간 계약)
 
@@ -141,17 +145,17 @@ CREATED
 
 ## 4. API / SSE 계약
 
-오케스트레이터가 구현하고 프론트가 소비하는 인터페이스. 프론트는 Kafka에 직접 접근하지 않는다.
+오케스트레이터가 구현하고 프론트가 소비하는 인터페이스. 프론트는 Kafka에 직접 접근하지 않는다. **`GET /products`만 예외로 `inventory-service`가 직접 구현한다** (2.1절 "예외" 참고).
 
 **REST (초기 상태 조회 및 생성)**
 
-| Method | Path | 용도 |
-|---|---|---|
-| GET | `/products` | 주문 생성 폼에 표시할 상품 목록 (재고, 데모 트리거 라벨 포함) |
-| POST | `/orders` | 주문 생성 |
-| GET | `/orders` | 주문 목록 (고객 뷰) |
-| GET | `/orders/{id}` | 주문 상세 + 상태 전이 히스토리 (SSE 연결 전 초기 하이드레이션) |
-| GET | `/ops/summary` | 운영 대시보드 초기 스냅샷 (총 주문수, 재시도 중 건수, DLQ 건수, 성공률) |
+| Method | Path | 구현 서비스 | 용도 |
+|---|---|---|---|
+| GET | `/products` | inventory-service | 주문 생성 폼에 표시할 상품 목록 (재고, 데모 트리거 라벨 포함) |
+| POST | `/orders` | order-saga-orchestrator | 주문 생성 |
+| GET | `/orders` | order-saga-orchestrator | 주문 목록 (고객 뷰) |
+| GET | `/orders/{id}` | order-saga-orchestrator | 주문 상세 + 상태 전이 히스토리 (SSE 연결 전 초기 하이드레이션) |
+| GET | `/ops/summary` | order-saga-orchestrator | 운영 대시보드 초기 스냅샷 (총 주문수, 재시도 중 건수, DLQ 건수, 성공률) |
 
 **SSE (실시간 갱신)**
 

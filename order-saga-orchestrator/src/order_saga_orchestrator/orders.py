@@ -1,7 +1,7 @@
 import uuid
-from enum import StrEnum
 
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from order_saga_orchestrator import events
 from order_saga_orchestrator.db import get_session
@@ -33,6 +33,14 @@ async def get_order(order_id: str) -> Order | None:
             return None
 
         return Order(id=order_model.id, status=order_model.status)
+
+
+async def get_orders() -> list[Order]:
+    async with get_session() as session:
+        result = await session.execute(select(OrderModel))
+        rows = result.scalars().all()
+
+        return [Order(id=row.id, status=row.status) for row in rows]
 
 
 async def update_status(order_id: str, status: OrderStatus) -> None:

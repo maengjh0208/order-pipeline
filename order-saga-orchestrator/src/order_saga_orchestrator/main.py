@@ -82,6 +82,11 @@ async def create_order() -> Order:
     return order
 
 
+@app.get("/orders")
+async def get_orders() -> list[Order]:
+    return await orders.get_orders()
+
+
 @app.get("/orders/{order_id}")
 async def get_order(order_id: str) -> Order:
     order = await orders.get_order(order_id)
@@ -89,6 +94,20 @@ async def get_order(order_id: str) -> Order:
         raise HTTPException(status_code=404, detail="Order not found")
 
     return order
+
+
+@app.get("/sse/ops")
+async def sse_ops():
+    async def event_generator():
+        q = events.subscribe()
+        try:
+            while True:
+                event = await q.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            events.unsubscribe(q)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/sse/orders/{order_id}")
