@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from confluent_kafka import Producer
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import Field, BaseModel
 from sqlalchemy import text
 
 from order_saga_orchestrator import orders, events
@@ -60,21 +61,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+class CreateOrderRequest(BaseModel):
+    items: list[orders.OrderItem] = Field(min_length=1)
+    card_number: str
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.post("/orders")
-async def create_order() -> Order:
-    order = await orders.create_order()
+async def create_order(body: CreateOrderRequest) -> Order:
+    order = await orders.create_order(body.items, body.card_number)
     await orders.update_status(order.id, OrderStatus.INVENTORY_RESERVING)
     order.status = OrderStatus.INVENTORY_RESERVING
 
     app.state.producer.produce(
         Topic.COMMANDS_INVENTORY,
         key=order.id,
-        value=json.dumps({"order_id": order.id, "action": "RESERVE", "items": []}),  # value로 bytes나 str만 받는다.
+        value=json.dumps(  # value로 bytes나 str만 받는다.
+            {"order_id": order.id, "action": "RESERVE", "items": [item.model_dump() for item in order.items], }),
     )
     # TODO: flush()를 매번 호출하면 브로커에 실제로 전달될 때까지 응답이 지연됨 (처리량 손해) -- 지금은 데모 규모라 '확실히 전달됐나'를 중요하게 봐서 이렇게 진행.
     app.state.producer.flush()

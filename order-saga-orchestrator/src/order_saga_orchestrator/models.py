@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from sqlalchemy import Uuid
+from sqlalchemy import Uuid, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -31,3 +31,5 @@ class OrderModel(Base):
     # Uuid 타입에 as_uuid=False 옵션을 주면, DB에는 네이티브 UUID로 저장하면서 Python에는 문자열로 돌려준다.
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
     status: Mapped[str]  # OrderStatus
+    items: Mapped[list[dict] | None] = mapped_column(JSON)
+    card_number: Mapped[str | None]

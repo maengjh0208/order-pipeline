@@ -53,7 +53,13 @@
     - [x] `main.py`를 FastAPI 앱으로 재구성 — 기존 `while True` Kafka 폴링 루프를 `consume_commands(producer, loop)` 백그라운드 스레드로 이동, `asyncio.run()` → `asyncio.run_coroutine_threadsafe(coro, loop).result()`로 전환(이유: FastAPI 메인 스레드 이벤트 루프와 백그라운드 스레드가 같은 SQLAlchemy 비동기 엔진/커넥션 풀을 서로 다른 이벤트 루프에서 건드리면 안 됨 — 오케스트레이터 DB 전환 때와 동일한 이유), `GET /products` 라우트 배선 완료
     - [x] `Dockerfile` CMD를 `uv run uvicorn inventory_service.main:app --host 0.0.0.0 --port 8000 --reload`로 변경 + `EXPOSE 8000` 추가(오케스트레이터 Dockerfile과 동일 패턴), `docker-compose.yaml`의 `inventory-service` 블록에 `ports: ["8001:8000"]` 추가(오케스트레이터가 이미 호스트 8000을 쓰므로 8001). 재빌드 후 `curl localhost:8001/products`로 시드 상품 2개 응답 확인, `docker compose logs`로 `commands.inventory 구독 중` 컨슈머 스레드도 정상 기동 확인 — REST + Kafka 워커가 한 프로세스에 공존하는 것 증명됨
     - CORS는 아직 추가 안 함 — 프론트가 아직 mock 서버에 붙어있고 실제 백엔드 연결은 이후 별도 작업이라, 그때 오케스트레이터와 함께 처리하기로 함(오케스트레이터도 현재 CORS 미설정 상태 확인함)
-  - [ ] **실제 주문 데이터 흐름 (`items`/`card_number`) — 진행 중 (2026-09-02 시작)**. 스펙 4.1절에 데이터 흐름 확정 완료: `POST /orders`가 `{items, card_number}` 바디를 받고, 오케스트레이터는 상품/재고를 미리 검증하지 않고 그대로 `commands.inventory` RESERVE에 실어보냄(inventory-service가 유일 권위, 없는 `product_id`도 `rowcount 0`으로 `OUT_OF_STOCK` 처리). `items`/`card_number`는 주문 레코드에 영속화(재시도 시 `commands.payment` 재발행, 보상 시 `RELEASE`에 필요) — `saga.py`의 현재 하드코딩 상수(`"4000000000000001"`, `items: []`)를 DB 읽기로 대체. `card_number`는 평문 저장하되 응답에선 제외. 이거 완료되면 `OUT_OF_STOCK` 경로 + 결정론적 결제 실패 카드가 실제 서비스로 실증됨.
+  - [x] **실제 주문 데이터 흐름 (`items`/`card_number`) 완료 (2026-09-03)**. 스펙 4.1절에 데이터 흐름 확정 후 구현:
+    - `models.py` `OrderModel`에 `items`(`JSON`, nullable), `card_number`(`str`, nullable) 컬럼 추가 + Alembic 마이그레이션(`1de22c88711b`). nullable로 둔 이유: 기존 테스트 행들 때문에 NOT NULL이면 마이그레이션 실패 — 옛 행은 NULL, 새 주문은 항상 값 채움.
+    - `orders.py`: `OrderItem` Pydantic 모델 신규(`quantity: Field(gt=0)`). **`Order` DTO에서 `card_number`를 아예 제거** — 원래 `exclude=True` 트릭으로 응답에서 숨기려 했으나, `Order`가 "API 응답 DTO"와 "비밀(카드번호) 운반체" 두 역할을 겸하는 게 설계 냄새라, 응답 경로가 카드번호를 **물리적으로** 못 흘리도록 필드 자체를 없앰. `saga.py` 전용으로 `get_saga_context(order_id) -> (items: list[dict], card_number: str) | None` 별도 읽기 함수를 둠 — "읽기 경로 하나로 통일"보다 "비밀 나르는 경로와 공개 응답 경로 분리"가 우선.
+    - `main.py`: `CreateOrderRequest`(`items: min_length=1`, `card_number`)로 `POST /orders` 바디 검증(신뢰 경계 → 위반 시 `422`). RESERVE 커맨드에 실제 `items` 실음(하드코딩 `[]` 제거).
+    - `saga.py`: 결제 재발행(RESERVED 분기, 재시도 분기)·보상(DLQ 분기)에서 `get_saga_context`로 DB에서 실제 `card_number`/`items`를 읽어 사용 — 하드코딩 상수(`"4000000000000001"`, `items: []`) 전부 제거.
+    - **end-to-end 검증(4개 서비스 실동작)**: (1) 정상 완주 — 응답에 `items` 포함/`card_number` 제외, DB엔 둘 다 저장 (2) `OUT_OF_STOCK` — 한정판 스니커즈(재고 1) 반복 주문 시 2회차부터 `INVENTORY_FAILED → CANCELLED` **실증** (3) 결제 실패 → DLQ → 보상 — 실패 카드로 `FAILED`×3 → `dlq.payment` 적재 → `RELEASE`로 예약 수량 **정확히 원복**(재고 998→996→998) → `CANCELLED`. `items`가 실제로 흘러 보상 트랜잭션이 올바른 수량을 되돌린다는 증거 (4) 검증 — 빈 `items`/`quantity:0`/`card_number` 누락 전부 `422`.
+    - **아직 안 함**: `product_id` UUID 형식 검증(mock 규모라 inventory-service가 모르는 id를 `OUT_OF_STOCK`으로 반려하는 것으로 충분). 스키마 변경 전 만들어진 옛 주문 행 3건이 `NOTIFYING`에 `items`/`card_number` NULL로 잔존(무해).
   - [ ] `GET /ops/summary` — 아직 미구현. 지금 `orders` 테이블에 `id`/`status`만 있고 **상태 전이 이력이 전혀 없어서** `dlq_count`("이 주문이 한 번이라도 DLQ를 거쳤는가") 판단이 불가능함 — 새 테이블/컬럼이 필요한 설계 결정, 아직 미착수. mock 서버(`frontend/mock-server/server.mjs`)엔 이미 구현되어 있으니 계약 참고용으로 쓸 것.
   - [x] 주문/사가 상태를 들고 있는 저장소 (인메모리, `orders.py`)
   - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
@@ -94,8 +100,7 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 **검증한 전체 시나리오**: `POST /orders` → (Kafka UI로 `events.inventory` RESERVED 발행) → `PAYMENT_PROCESSING` → (`events.payment` FAILED × 3, attempt 1→2→3) → `RETRYING_PAYMENT` 반복 → `PAYMENT_FAILED_DLQ` → `dlq.payment` 적재 확인 + `commands.inventory` RELEASE 발행 확인 → `COMPENSATING_INVENTORY` → (Kafka UI로 `events.inventory` RELEASED 발행) → `CANCELLED`. 전체 과정을 `GET /sse/orders/{id}`로 실시간 스트리밍되는 것까지 curl -N으로 확인함.
 
 **참고 (다음에 이어갈 때)**:
-- `card_number`는 `POST /orders`가 아직 입력을 안 받아서 `saga.py`에 하드코딩(`"4111111111111111"`)되어 있음 — 나중에 실제 주문 폼이 생기면 `Order`에 필드 추가하고 여기로 넘겨받게 바뀔 것
-- `commands.inventory`의 `items`도 항상 빈 배열(`[]`)로 하드코딩 — 같은 이유
+- ~~`card_number`/`items` 하드코딩~~ → **2026-09-03 해소**: `POST /orders`가 `{items, card_number}` 바디를 받고 `OrderModel`에 영속화, `saga.py`는 `orders.get_saga_context()`로 DB에서 읽어 씀. 위 "실제 주문 데이터 흐름" 항목 참고.
 - 순수 Python 코드 변경은 `docker compose up --build` 없이도 반영됨 — `./order-saga-orchestrator/src/`가 볼륨 마운트되어 있고 `uvicorn --reload`라서 자동 재시작됨. 리빌드는 `pyproject.toml`/`uv.lock`(의존성)이나 `Dockerfile`이 바뀔 때만 필요
 - `events.notification`처럼 **한 번도 안 쓰인 새 토픽**을 처음 구독할 때, 컨슈머가 뜬 시점에 토픽이 아직 없으면 `UNKNOWN_TOPIC_OR_PART` 이슈(wave 2 상세 참고)가 또 발생함 — Kafka UI로 메시지 발행해서 토픽 만든 뒤 `docker compose restart order-saga-orchestrator`로 재구독하면 해결
 
@@ -108,7 +113,7 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
   - 시드 데이터(`한정판 스니커즈` 재고 1개=품절 시연용, `기본 티셔츠` 재고 999개)는 스키마가 아니라 데이터라 Alembic 마이그레이션 파일 안에 `op.bulk_insert()`로 넣음.
 - **재고 예약/해제는 원자적 `UPDATE ... WHERE stock >= quantity`로 처리** (`inventory.py`). SELECT 후 UPDATE 두 단계로 하지 않고 한 문장으로 묶어서, 인스턴스가 여러 개여도 "둘 다 재고 있다고 착각"하는 lost-update를 원천 차단. `rowcount == 0`이면 재고 부족으로 판단해 `ValueError` 발생 → `get_session()`의 롤백이 트랜잭션 전체(이미 성공했던 다른 상품 차감분 포함)를 되돌림.
   - **데드락 방지**: 여러 상품(`items`)을 처리할 때 `product_id` 기준으로 항상 정렬 후 순회. 이유: 트랜잭션 A가 `[p1, p2]` 순서로, 트랜잭션 B가 `[p2, p1]` 순서로 동시에 락을 걸면 서로가 서로의 완료를 기다리는 순환 대기(진짜 데드락, 언젠간 풀리는 단순 블로킹이 아님)가 생김 — Postgres가 감지해서 한쪽을 강제 실패시킴. 항상 같은 순서로 락을 걸면 이 순환 자체가 원천적으로 불가능해짐. `reserve`/`release` 둘 다 적용(액션 종류와 무관하게 같은 테이블 행에 락을 거는 이상 동일하게 필요).
-- **현재 한계**: `commands.inventory`의 `items`가 오케스트레이터에서 항상 빈 배열로 하드코딩되어 있어서(`saga.py` 참고), 지금은 `RESERVE`가 항상 성공(`RESERVED`)함 — `OUT_OF_STOCK` 경로는 아직 실증 못 함. 나중에 오케스트레이터가 실제 `product_id`/수량을 채워 보내려면, 그 UUID를 오케스트레이터가 어디서 알아내는지(재고 조회를 오케스트레이터가 대신 서빙할지, inventory-service에 직접 물어볼지)를 정해야 함 — `GET /products` 설계와 맞물린 열린 질문.
+- **~~현재 한계~~ 해소됨 (2026-09-03)**: 예전엔 `commands.inventory`의 `items`가 오케스트레이터에서 빈 배열로 하드코딩돼 `RESERVE`가 항상 성공했음. 이제 `POST /orders`가 실제 `items`를 받아 그대로 실어보내고, inventory-service의 원자적 `UPDATE ... WHERE stock >= quantity`가 `rowcount 0`이면 `OUT_OF_STOCK` 반환 — 한정판 스니커즈(재고 1) 반복 주문으로 실증 완료. 오케스트레이터는 `product_id`를 자체적으로 알 필요 없음(프론트가 `GET /products`로 조회한 값을 그대로 보냄, 스펙 4.1절). "없는 `product_id`"도 매칭 행이 없어 동일하게 `OUT_OF_STOCK` 처리 — 별도 결과값 안 둠.
 - **볼륨 이름 변경 주의사항**: `postgres` 서비스를 `order-postgres`로 리네이밍하면서 볼륨명도 `postgres_data` → `order_postgres_data`로 바뀜 → Docker는 이름이 다르면 완전히 새 볼륨으로 취급해서, 기존 `orders` 테이블이 있던 데이터가 안 보이는 문제 발생(`UndefinedTableError`). 서비스/볼륨 이름을 바꾸면 새 볼륨에 마이그레이션을 다시 적용해야 함. 안 쓰는 옛 볼륨(`docker volume ls`로 확인)은 정리 필요.
 
 ### 프론트엔드 실행 순서 (예광탄 방식 적용)

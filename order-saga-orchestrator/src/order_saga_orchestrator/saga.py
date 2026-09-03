@@ -22,6 +22,13 @@ async def handle_events_inventory(event: dict, producer: Producer) -> None:
     print(f"{Topic.EVENTS_INVENTORY} 수신: order_id={order_id}, action={action}, result={result}")
 
     if action == "RESERVE" and result == "RESERVED":
+        context = await orders.get_saga_context(order_id)
+        if context is None:
+            print(f"order_id:{order_id} 주문 존재하지 않음")
+            return None
+
+        _, card_number = context
+
         await orders.update_status(order_id, OrderStatus.INVENTORY_RESERVED)
         await orders.update_status(order_id, OrderStatus.PAYMENT_PROCESSING)
         producer.produce(
@@ -29,7 +36,7 @@ async def handle_events_inventory(event: dict, producer: Producer) -> None:
             key=order_id,
             value=json.dumps({
                 "order_id": order_id,
-                "card_number": "4000000000000001",  # TODO: 일단은 임의 값
+                "card_number": card_number,
                 "attempt": 1,
             })
         )
@@ -61,6 +68,13 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
         producer.flush()
         print(f"{Topic.COMMANDS_NOTIFICATION} 처리")
     elif result == "FAILED":
+        context = await orders.get_saga_context(order_id)
+        if context is None:
+            print(f"order_id:{order_id} 주문 존재하지 않음")
+            return None
+
+        order_items, card_number = context
+
         await orders.update_status(order_id, OrderStatus.PAYMENT_FAILED)
 
         if attempt < MAX_PAYMENT_ATTEMPTS:
@@ -70,7 +84,7 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
                 key=order_id,
                 value=json.dumps({
                     "order_id": order_id,
-                    "card_number": "4000000000000001",  # TODO: 일단은 임의 값
+                    "card_number": card_number,
                     "attempt": attempt + 1,
                 })
             )
@@ -85,7 +99,7 @@ async def handle_events_payment(event: dict, producer: Producer) -> None:
                 value=json.dumps({
                     "order_id": order_id,
                     "action": "RELEASE",
-                    "items": [],
+                    "items": order_items,
                 })
             )
             producer.flush()
