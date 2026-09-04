@@ -120,6 +120,17 @@ services:
       kafka:
         condition: service_started
 
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_INVENTORY_BASE_URL: http://localhost:8001
+    volumes:
+      - ./frontend/:/app
+      - /app/node_modules
+
 volumes:
   order_postgres_data:
   inventory_postgres_data:

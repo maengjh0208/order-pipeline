@@ -221,6 +221,23 @@ CREATED
 
 운영 대시보드는 `/ops/summary`로 초기 스냅샷을 하이드레이션한 뒤 `/sse/ops` 스트림을 누적 반영해 클라이언트에서 통계를 갱신한다. 별도 폴링 엔드포인트는 두지 않는다.
 
+### 4.2 실제 구현 시 결정 사항 (2026-09-03, 프로젝트 마감 스코프)
+
+`SagaEvent` 전체 스키마 중 오케스트레이터의 `update_status()`가 이벤트를 발행하는 시점에 **비용 없이 채울 수 있는 필드만** 우선 구현한다:
+
+- `event_id`(신규 UUID), `order_id`, `from_status`(전이 직전 값), `to_status`, `occurred_at`(발행 시각)
+- `saga_step`: `to_status` → 단계 매핑 순수 함수로 유도 (`INVENTORY_*` → `INVENTORY`, `PAYMENT_*`/`PAID` → `PAYMENT`, `NOTIFYING` → `NOTIFICATION`)
+- **`attempt` / `max_attempts` / `reason`은 생략** — 이 값들은 `update_status()`가 아니라 사가 컨텍스트(어느 재시도인지, 왜 실패했는지)에 있어서, 넘기려면 모든 `update_status` 호출부에 인자를 추가해야 한다. 운영 대시보드의 이벤트 로그 테이블은 이 세 필드를 렌더링하지 않으므로 지금은 불필요. 나중에 필요해지면 그때 사가 → `update_status` 인자 전달로 확장.
+
+`/ops/summary`의 `dlq_count`("이 주문이 한 번이라도 DLQ를 거쳤는가"):
+
+- 상태 스냅샷으로는 판단 불가 — 주문이 `PAYMENT_FAILED_DLQ`를 잠깐 거쳐 `CANCELLED`로 끝나므로 현재 `status`만 봐선 놓친다.
+- **`OrderModel`에 `went_to_dlq: bool` 컬럼 하나** 추가하고, 사가의 DLQ 분기에서 `True`로 세팅. 전이 이력 테이블(`order_events`)은 만들지 않는다 — 그건 위에서 생략한 `attempt`/`reason` 이력과 함께 "rich 이벤트" 확장 과제로 미룬다. `dlq_count` 하나 때문에 이력 테이블을 도입하는 건 과설계.
+
+`/ops/summary` 나머지 지표는 `orders` 테이블 집계로 즉시 계산: `total_orders`(전체), `retrying_count`(`status = RETRYING_PAYMENT`), `success_rate`(`COMPLETED / (COMPLETED + CANCELLED)`, 종결 주문이 0이면 0).
+
+**SSE `id:` 라인 + Last-Event-ID 재전송**: 실제 오케스트레이터에는 아직 구현하지 않는다(mock 서버만 구현). `EventSource`가 끊기면 자동 재연결하되 그 사이 이벤트는 유실 — 로컬 시연 규모에서 허용. 서버측 재전송 버퍼는 rich 이벤트 확장과 함께.
+
 ## 5. 프론트엔드 구조
 
 **스택**: Vite + React + TypeScript, `react-router`(라우팅), TanStack Query(REST fetch/cache) + React 기본 상태(`useState`/`useReducer`)로 SSE 푸시를 캐시에 merge. Redux 등 전역 상태 라이브러리는 이 규모에는 과설계이므로 사용하지 않는다.

@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import Field, BaseModel
 from sqlalchemy import text
+from starlette.middleware.cors import CORSMiddleware
 
 from order_saga_orchestrator import orders, events
 from order_saga_orchestrator.db import engine
@@ -59,6 +60,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class CreateOrderRequest(BaseModel):
@@ -134,3 +141,8 @@ async def sse_order(order_id: str):
     # 첫번째 인자로 제너레이터(generator 또는 async generator)를 받는다.
     # 언제 사용하나? 대용량 파일 다운로드, 실시간 데이터 스트리밍, SSE(Server-Sent Events), 처리 시간이 긴 응답
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/ops/summary")
+async def ops_summary() -> orders.OpsSummary:
+    return await orders.get_ops_summary()

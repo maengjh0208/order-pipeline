@@ -39,7 +39,9 @@
 - [x] Notion에 요구사항/설계 문서 정리 (mermaid 다이어그램 포함)
 - [x] 프론트엔드 wave 1 (walking skeleton) 완료 — `feature/order-pipeline-frontend` 브랜치, 브라우저에서 주문 생성 → SSE로 상태가 실시간 갱신되는 것까지 확인함
 - [x] 프론트엔드 wave 2(상태 머신 시각화, 주문 목록/생성/상세 페이지, 라우팅) 완료 — 아래 "wave 2 상세" 참고. 브라우저에서 주문 생성 → 상세 페이지 타임라인이 실시간으로 CREATED~COMPLETED까지 진행되는 것, 목록 페이지 반영까지 확인함
-- [ ] 프론트엔드 wave 3~5 — 아래 "실행 순서" 참고
+- [x] 프론트엔드 wave 3~5 완료 — 아래 "실행 순서" 참고
+- [x] **프론트엔드 ↔ 실제 백엔드 연결 완료 (2026-09-03~04)** — 아래 "프론트-백엔드 연결" 참고. 브라우저에서 실제 4개 마이크로서비스로 주문 생성/실패 시나리오/운영 대시보드 실시간 관찰. `/ops`도 실제 백엔드 연결됨(`/ops/summary` + rich SSE 이벤트 구현). **프로젝트 2순위 목표(Observability 대시보드)까지 end-to-end 완결.**
+- [x] Docker Compose 전체 통합 완료 — frontend까지 컨테이너로 편입(`frontend/Dockerfile` 개발 모드, 볼륨 마운트 + HMR). `docker compose up` 하나로 프론트+백엔드 4개+Kafka+Postgres 2개 전부 기동.
 - [x] `order-saga-orchestrator` 백엔드 wave 1 (walking skeleton) 완료 — FastAPI `/health` 엔드포인트, uv(src 레이아웃), Dockerfile + `docker-compose.yaml`(src 볼륨 마운트로 핫리로드).
 - [x] `order-saga-orchestrator` 백엔드 wave 2 (Kafka 연결 증명) 완료 — 아래 "wave 2 상세" 참고. producer/consumer 둘 다 컨테이너 안 FastAPI 앱에서 직접 동작 확인함.
 - [x] `order-saga-orchestrator` 백엔드 wave 3 (핵심 사가 로직) 완료 — 아래 "wave 3 상세" 참고. 주문 생성 → 재고 예약 → 결제(성공/실패) → 재시도(최대 3회) → DLQ 적재 → 재고 보상 트랜잭션 → 취소, 전체 사가가 SSE로 실시간 관측되는 것까지 end-to-end 확인함. `/_debug/produce`는 삭제함.
@@ -52,7 +54,7 @@
     - [x] `inventory.py`에 `Product` 모델 + `get_products()`(전체 조회) 추가
     - [x] `main.py`를 FastAPI 앱으로 재구성 — 기존 `while True` Kafka 폴링 루프를 `consume_commands(producer, loop)` 백그라운드 스레드로 이동, `asyncio.run()` → `asyncio.run_coroutine_threadsafe(coro, loop).result()`로 전환(이유: FastAPI 메인 스레드 이벤트 루프와 백그라운드 스레드가 같은 SQLAlchemy 비동기 엔진/커넥션 풀을 서로 다른 이벤트 루프에서 건드리면 안 됨 — 오케스트레이터 DB 전환 때와 동일한 이유), `GET /products` 라우트 배선 완료
     - [x] `Dockerfile` CMD를 `uv run uvicorn inventory_service.main:app --host 0.0.0.0 --port 8000 --reload`로 변경 + `EXPOSE 8000` 추가(오케스트레이터 Dockerfile과 동일 패턴), `docker-compose.yaml`의 `inventory-service` 블록에 `ports: ["8001:8000"]` 추가(오케스트레이터가 이미 호스트 8000을 쓰므로 8001). 재빌드 후 `curl localhost:8001/products`로 시드 상품 2개 응답 확인, `docker compose logs`로 `commands.inventory 구독 중` 컨슈머 스레드도 정상 기동 확인 — REST + Kafka 워커가 한 프로세스에 공존하는 것 증명됨
-    - CORS는 아직 추가 안 함 — 프론트가 아직 mock 서버에 붙어있고 실제 백엔드 연결은 이후 별도 작업이라, 그때 오케스트레이터와 함께 처리하기로 함(오케스트레이터도 현재 CORS 미설정 상태 확인함)
+    - ~~CORS 미추가~~ → 2026-09-03 오케스트레이터·inventory-service 둘 다 추가 완료 (아래 "프론트-백엔드 연결" 참고)
   - [x] **실제 주문 데이터 흐름 (`items`/`card_number`) 완료 (2026-09-03)**. 스펙 4.1절에 데이터 흐름 확정 후 구현:
     - `models.py` `OrderModel`에 `items`(`JSON`, nullable), `card_number`(`str`, nullable) 컬럼 추가 + Alembic 마이그레이션(`1de22c88711b`). nullable로 둔 이유: 기존 테스트 행들 때문에 NOT NULL이면 마이그레이션 실패 — 옛 행은 NULL, 새 주문은 항상 값 채움.
     - `orders.py`: `OrderItem` Pydantic 모델 신규(`quantity: Field(gt=0)`). **`Order` DTO에서 `card_number`를 아예 제거** — 원래 `exclude=True` 트릭으로 응답에서 숨기려 했으나, `Order`가 "API 응답 DTO"와 "비밀(카드번호) 운반체" 두 역할을 겸하는 게 설계 냄새라, 응답 경로가 카드번호를 **물리적으로** 못 흘리도록 필드 자체를 없앰. `saga.py` 전용으로 `get_saga_context(order_id) -> (items: list[dict], card_number: str) | None` 별도 읽기 함수를 둠 — "읽기 경로 하나로 통일"보다 "비밀 나르는 경로와 공개 응답 경로 분리"가 우선.
@@ -60,7 +62,7 @@
     - `saga.py`: 결제 재발행(RESERVED 분기, 재시도 분기)·보상(DLQ 분기)에서 `get_saga_context`로 DB에서 실제 `card_number`/`items`를 읽어 사용 — 하드코딩 상수(`"4000000000000001"`, `items: []`) 전부 제거.
     - **end-to-end 검증(4개 서비스 실동작)**: (1) 정상 완주 — 응답에 `items` 포함/`card_number` 제외, DB엔 둘 다 저장 (2) `OUT_OF_STOCK` — 한정판 스니커즈(재고 1) 반복 주문 시 2회차부터 `INVENTORY_FAILED → CANCELLED` **실증** (3) 결제 실패 → DLQ → 보상 — 실패 카드로 `FAILED`×3 → `dlq.payment` 적재 → `RELEASE`로 예약 수량 **정확히 원복**(재고 998→996→998) → `CANCELLED`. `items`가 실제로 흘러 보상 트랜잭션이 올바른 수량을 되돌린다는 증거 (4) 검증 — 빈 `items`/`quantity:0`/`card_number` 누락 전부 `422`.
     - **아직 안 함**: `product_id` UUID 형식 검증(mock 규모라 inventory-service가 모르는 id를 `OUT_OF_STOCK`으로 반려하는 것으로 충분). 스키마 변경 전 만들어진 옛 주문 행 3건이 `NOTIFYING`에 `items`/`card_number` NULL로 잔존(무해).
-  - [ ] `GET /ops/summary` — 아직 미구현. 지금 `orders` 테이블에 `id`/`status`만 있고 **상태 전이 이력이 전혀 없어서** `dlq_count`("이 주문이 한 번이라도 DLQ를 거쳤는가") 판단이 불가능함 — 새 테이블/컬럼이 필요한 설계 결정, 아직 미착수. mock 서버(`frontend/mock-server/server.mjs`)엔 이미 구현되어 있으니 계약 참고용으로 쓸 것.
+  - [x] `GET /ops/summary` 완료 (2026-09-04) — 스펙 4.2절 결정대로. `OrderModel`에 `created_at`(`timestamptz`, `server_default=func.now()`), `went_to_dlq`(`bool`, `server_default="false"`) 컬럼 추가 + 마이그레이션(`4f948dd051a8`). `went_to_dlq`는 `update_status`가 `status == PAYMENT_FAILED_DLQ` 전이를 볼 때 세팅 — "과거에 DLQ 거쳤나"는 상태 스냅샷으로 못 잡으니(곧 `CANCELLED`로 끝남) 플래그 하나로. 전이 이력 테이블은 안 만듦(과설계). `get_ops_summary()`가 `orders` 테이블 집계: `total`/`retrying_count`(`status=RETRYING_PAYMENT`)/`dlq_count`(`went_to_dlq`)/`success_rate`(`COMPLETED/(COMPLETED+CANCELLED)`). `success_rate` 분모를 전체가 아닌 **종결 주문**으로 잡음(진행 중인 걸 실패로 세지 않으려고).
   - [x] 주문/사가 상태를 들고 있는 저장소 (인메모리, `orders.py`)
   - [x] 컨슈머가 `events.inventory` + `events.payment`를 함께 구독, 받은 이벤트로 실제 상태 머신(스펙 3절)을 진행시키는 로직 (`saga.py`)
 - [x] 알림(`commands.notification`/`events.notification`, `PAID` → `NOTIFYING` → `COMPLETED`) 완료 — 스펙 3절 상태 머신이 이제 전부 구현됨 (`CREATED`부터 `COMPLETED`/`CANCELLED`까지 모든 경로)
@@ -71,7 +73,24 @@
 - **4개 서비스(오케스트레이터+inventory+payment+notification) 전부 갖춰짐 — `POST /orders` 한 번으로 Kafka UI 수동 개입 없이 `CREATED`부터 `COMPLETED`(또는 결제 실패 시 `CANCELLED`)까지 완전 자동 완주하는 것 확인함.** 이 프로젝트 1순위 목표(Saga Orchestration)가 실제 마이크로서비스로 end-to-end 증명된 마일스톤.
   - 겪은 문제: 새 컨테이너/볼륨으로 처음 뜰 때 `events.payment`처럼 그 시점까지 한 번도 안 쓰인 토픽을 오케스트레이터가 구독 시도하면 다시 `UNKNOWN_TOPIC_OR_PART` 이슈 발생 (wave 2 상세 참고) — `payment-service`가 나중에 그 토픽에 처음 발행해 토픽이 생겨도 오케스트레이터는 5분간 재확인을 안 하므로, `docker compose restart order-saga-orchestrator`로 재구독해야 함. 여러 서비스를 한꺼번에 새로 띄울 때 반복될 수 있는 패턴이니 기억해둘 것.
 - [x] `order-saga-orchestrator` 주문 저장소 인메모리 → PostgreSQL 전환 완료 (아래 "백엔드 설계 결정" 참고) — `orders.py`/`main.py`/`saga.py` 전부 async DB 세션 기반으로 전환, 컨테이너 재시작 후에도 주문 상태가 유지되는 것 확인함 (첫 영속성 증명)
-- [ ] Docker Compose 전체 통합(모든 서비스 + Kafka) 및 로컬 시연
+- [x] Docker Compose 전체 통합(모든 서비스 + Kafka + 프론트) 및 로컬 시연 완료 (2026-09-04)
+
+### 프론트-백엔드 연결 (2026-09-03~04)
+
+프론트는 spec 4절 계약(rich `SagaEvent`, `history` 등)에 맞춰 mock 서버로 개발됐는데 실제 백엔드는 더 얇게 구현돼 있어, "URL만 바꾸기"가 아니라 계약 정합 작업이었음. **방향: 고객 주문 흐름만 먼저 연결, 필드명은 백엔드가 spec 따름, `demo_note`는 제거** (스펙 2.1절/4절, 4.2절 참고).
+
+- **CORS**: 오케스트레이터·inventory-service 둘 다 `CORSMiddleware` 추가, `allow_origins=["http://localhost:5173"]`(Vite 개발 서버). CORS는 브라우저가 보내는 `Origin`(= SPA를 내려준 곳)과 대조하는 것 — 컨테이너 서비스명이 아니라 호스트 브라우저가 접속한 주소.
+- **필드명 정합 (백엔드가 spec 따름)**: `Order` Pydantic에 `serialization_alias`로 `id→order_id`, `status→current_status` (내부 코드는 `.id`/`.status` 그대로, JSON 응답만 spec 이름). inventory `Product`도 `id→product_id`. FastAPI가 응답 직렬화 시 `by_alias=True` 기본이라 자동 적용.
+- **SSE payload rich화**: `update_status`가 `{order_id, to_status}`만 보내던 걸 `{event_id, order_id, saga_step, from_status, to_status, occurred_at}`로 확장. `from_status`는 상태 바꾸기 직전 값, `saga_step`은 `saga_step_for()` 순수 함수로 status에서 유도. `attempt`/`reason`은 생략(사가 컨텍스트에 있고 이벤트 로그가 렌더링 안 함, 스펙 4.2절). `CANCELLED`/`COMPLETED`의 `saga_step`은 유도 불가라 기본값 `PAYMENT` — 로그 라벨이라 무해.
+- **프론트 (`frontend/`, Claude Code 작성/커밋)**:
+  - `api.ts`: 오케스트레이터(`VITE_API_BASE_URL`, 기본 `:8000`) / inventory(`VITE_INVENTORY_BASE_URL`, 기본 `:8001`) base URL 분리. `useOrderStream`/`useOpsStream`도 `api.ts`의 `API_BASE_URL` 공유(기존 `:4000` 기본값 → mock 폴백은 `.env.example`에 문서화).
+  - `types/order.ts`: `Order`를 실제 응답 형태로 축소(`order_id`/`current_status`/`items`만 — `history`/`card_number`/타임스탬프 제거). `SagaEvent`의 `attempt`/`max_attempts`/`reason` optional화.
+  - `NewOrderPage`: 주문 성공 시 `queryClient.invalidateQueries(["orders"])` — 목록 페이지 복귀 시 새 주문 포함 최신 목록 refetch. 상품 옵션 라벨은 `demo_note` 대신 재고 수량 표시.
+  - `vite.config.ts`: `server.host: true`(0.0.0.0 바인딩) + `watch.usePolling`(마운트 볼륨 변경 감지). 컨테이너 구동용.
+  - `GET /orders` 정렬: `order_by(created_at.desc())` — 새 주문이 목록 맨 위 (기존엔 정렬 없어서 안 보였음).
+- **`/ops` 대시보드**: 위 rich SSE + `/ops/summary`로 실제 백엔드 연결 완료. `EventLogTable`이 쓰는 필드(`event_id`/`occurred_at`/`saga_step`/`from_status`/`to_status`) 전부 실제 SSE에 있음. lint/빌드/테스트(51개) 통과.
+- **미완(스펙 4.2절)**: 실제 오케스트레이터의 SSE `id:` 라인 + `Last-Event-ID` 재전송(mock만 구현), rich 이벤트의 `attempt`/`reason` 이력.
+- **at-least-once 관련**: 4개 컨슈머 전부 `enable.auto.commit` 미설정 = librdkafka 기본(auto-commit, 5초 간격, offset은 poll 시점에 저장). "처리 후 커밋"이 아니라 시간표 커밋이라 크래시 타이밍에 따라 재전달/유실 경합. 진짜 at-least-once면 수동 커밋 + 멱등 컨슈머 + dedup 필요 — README "알려진 한계"에 기록.
 
 ### wave 2 상세 (Kafka 연결 증명, 2026-08-19~20)
 
@@ -105,6 +124,8 @@ FastAPI 앱 안에서 Kafka producer/consumer가 실제로 동작하는 것까�
 - `events.notification`처럼 **한 번도 안 쓰인 새 토픽**을 처음 구독할 때, 컨슈머가 뜬 시점에 토픽이 아직 없으면 `UNKNOWN_TOPIC_OR_PART` 이슈(wave 2 상세 참고)가 또 발생함 — Kafka UI로 메시지 발행해서 토픽 만든 뒤 `docker compose restart order-saga-orchestrator`로 재구독하면 해결
 
 ### inventory-service 상세 (2026-08-27~31)
+
+> **주의**: 아래는 wave 2 시점 기록. 이후 `GET /products` 작업(2026-09-02)에서 FastAPI 앱으로 재구성됨 — Kafka 폴링 루프는 백그라운드 스레드로 이동, `run_coroutine_threadsafe` 다리 추가. 위 "`GET /products` 완료" 항목 참고.
 
 `order-saga-orchestrator`와 달리 REST/FastAPI가 없는 순수 Kafka 워커 — `main()`이 메인 스레드에서 그냥 `while True` 폴링 루프를 도는 동기 스크립트라, 스레드↔이벤트루프 다리(`run_coroutine_threadsafe`)가 필요 없음. async DB 함수를 호출할 때는 메시지 하나당 `asyncio.run(handle_commands_inventory(...))`으로 그때그때 새 이벤트 루프를 만들었다 닫는 것으로 충분.
 

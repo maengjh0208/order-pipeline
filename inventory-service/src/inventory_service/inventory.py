@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import update, select
 
 from inventory_service.db import get_session
@@ -6,7 +6,7 @@ from inventory_service.models import ProductModel
 
 
 class Product(BaseModel):
-    id: str
+    id: str = Field(serialization_alias="product_id")
     product_name: str
     stock: int
 

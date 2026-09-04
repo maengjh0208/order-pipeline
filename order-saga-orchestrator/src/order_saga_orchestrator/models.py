@@ -1,6 +1,7 @@
+from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Uuid, JSON
+from sqlalchemy import Uuid, JSON, DateTime, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -33,3 +34,6 @@ class OrderModel(Base):
     status: Mapped[str]  # OrderStatus
     items: Mapped[list[dict] | None] = mapped_column(JSON)
     card_number: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), # DateTime(timezone=True): UTC timezone도 함께 기록한다.
+                                                 server_default=func.now())  # server_default=func.now(): 값을 DB가 채운다.
+    went_to_dlq: Mapped[bool] = mapped_column(server_default="false")

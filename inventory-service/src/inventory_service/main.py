@@ -6,6 +6,7 @@ from json import JSONDecodeError
 
 from confluent_kafka import Consumer, Producer
 from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 from inventory_service.config import settings
 from inventory_service import inventory
@@ -102,6 +103,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/products")
