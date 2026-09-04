@@ -34,6 +34,8 @@
 
 ## 현재 진행 상황
 
+> **상태 (2026-09-04): 포트폴리오로 완결.** 1순위(Kafka Saga Orchestration + 재시도/DLQ/보상)와 2순위(실시간 운영 대시보드) 둘 다 실제 4개 마이크로서비스로 end-to-end 동작. `docker compose up` 하나로 프론트+백엔드 전부 기동, 브라우저에서 주문 생성/실패 시나리오/운영 대시보드 관찰 확인. 의도적으로 남긴 것: at-least-once 완성(수동 커밋+멱등+dedup), 실제 오케스트레이터 SSE `Last-Event-ID` 재전송, rich 이벤트 `attempt`/`reason` 이력, 스키마 레지스트리(백로그). README "알려진 한계" 참고.
+
 - [x] 아키텍처 브레인스토밍 및 spec 확정 (Orchestration 기반 Saga, 상태 머신, API/SSE 계약)
 - [x] 프론트엔드 구현 계획 작성
 - [x] Notion에 요구사항/설계 문서 정리 (mermaid 다이어그램 포함)
@@ -41,13 +43,13 @@
 - [x] 프론트엔드 wave 2(상태 머신 시각화, 주문 목록/생성/상세 페이지, 라우팅) 완료 — 아래 "wave 2 상세" 참고. 브라우저에서 주문 생성 → 상세 페이지 타임라인이 실시간으로 CREATED~COMPLETED까지 진행되는 것, 목록 페이지 반영까지 확인함
 - [x] 프론트엔드 wave 3~5 완료 — 아래 "실행 순서" 참고
 - [x] **프론트엔드 ↔ 실제 백엔드 연결 완료 (2026-09-03~04)** — 아래 "프론트-백엔드 연결" 참고. 브라우저에서 실제 4개 마이크로서비스로 주문 생성/실패 시나리오/운영 대시보드 실시간 관찰. `/ops`도 실제 백엔드 연결됨(`/ops/summary` + rich SSE 이벤트 구현). **프로젝트 2순위 목표(Observability 대시보드)까지 end-to-end 완결.**
-- [x] Docker Compose 전체 통합 완료 — frontend까지 컨테이너로 편입(`frontend/Dockerfile` 개발 모드, 볼륨 마운트 + HMR). `docker compose up` 하나로 프론트+백엔드 4개+Kafka+Postgres 2개 전부 기동.
+- [x] frontend까지 컨테이너로 편입 (`frontend/Dockerfile` 개발 모드, 볼륨 마운트 + HMR, `vite.config`에 `host:true`) — `docker compose up` 하나로 프론트+백엔드 4개+Kafka+Postgres 2개 전부 기동. (아래 Docker Compose 전체 통합 항목과 함께 프로젝트 마무리)
 - [x] `order-saga-orchestrator` 백엔드 wave 1 (walking skeleton) 완료 — FastAPI `/health` 엔드포인트, uv(src 레이아웃), Dockerfile + `docker-compose.yaml`(src 볼륨 마운트로 핫리로드).
 - [x] `order-saga-orchestrator` 백엔드 wave 2 (Kafka 연결 증명) 완료 — 아래 "wave 2 상세" 참고. producer/consumer 둘 다 컨테이너 안 FastAPI 앱에서 직접 동작 확인함.
 - [x] `order-saga-orchestrator` 백엔드 wave 3 (핵심 사가 로직) 완료 — 아래 "wave 3 상세" 참고. 주문 생성 → 재고 예약 → 결제(성공/실패) → 재시도(최대 3회) → DLQ 적재 → 재고 보상 트랜잭션 → 취소, 전체 사가가 SSE로 실시간 관측되는 것까지 end-to-end 확인함. `/_debug/produce`는 삭제함.
   - [x] `POST /orders`, `GET /orders/{id}` — 스펙 4절 계약대로
   - [x] `GET /sse/orders/{order_id}` — 스펙 4절 계약대로
-  - [x] `GET /orders`(목록) 완료 (2026-09-01) — `orders.py`에 `get_orders()`(`select(OrderModel)` 전체 조회) 추가, `main.py`에 라우트 배선. `curl`로 방금 생성한 주문이 목록에 포함되는 것까지 확인함. 정렬 기준은 아직 없음(추후 필요해지면 결정).
+  - [x] `GET /orders`(목록) 완료 (2026-09-01) — `orders.py`에 `get_orders()` 추가, `main.py`에 라우트 배선. 2026-09-04에 `order_by(OrderModel.created_at.desc())` 최신순 정렬 추가 (아래 "프론트-백엔드 연결" 참고 — 정렬 없을 땐 새 주문이 목록에서 안 보였음).
   - [x] `GET /sse/ops` 완료 (2026-09-01) — `sse_order`와 동일 구조에서 `order_id` 필터링 `if`만 뺀 형태로 `main.py`에 추가. 첫 시도에서 `while True:` 루프가 빠져 이벤트 하나만 받고 스트림이 바로 끊기는 버그가 있었으나 리뷰로 발견, 수정 후 `curl -N`으로 사가 전체 이벤트가 끊김 없이 흐르는 것 확인함. `sse_order`/`sse_ops`의 `event_generator` 중복은 **Rule of Three 원칙에 따라 지금은 리팩터링하지 않기로 결정** — 세 번째 SSE 엔드포인트가 생기면 그때 공용 헬퍼로 추출 여부를 재논의.
   - [x] `GET /products` 완료 (2026-09-02) — **설계 변경**: 오케스트레이터가 정적 시드 데이터를 노출하는 대신, `inventory-service`가 직접 REST로 노출하기로 결정(스펙 2.1절/4절에 반영 완료). 이유: 오케스트레이터에 하드코딩하면 실제 재고(DB)와 별개로 움직이는 가짜 스냅샷이 되고, 오케스트레이터가 프록시로 한 번 더 감싸면 `inventory-service` 장애가 오케스트레이터의 무관한 엔드포인트까지 전파되는 문제가 생김. `commands.inventory`(쓰기, Kafka)와 `GET /products`(읽기, REST)가 한 서비스 안에 공존하는 CQRS 스타일 read/write 분리로 볼 수 있음.
     - [x] `uv add fastapi "uvicorn[standard]"`로 의존성 추가 (오케스트레이터와 동일 버전대)
@@ -208,7 +210,7 @@ wave 1이 각 파일을 얇게(상태값만, 성공 경로만) 구현해뒀던 �
 - **결제 최종 실패 시 재고를 보상 트랜잭션으로 되돌린다.** `commands.inventory`에 `action: RESERVE | RELEASE` 필드를 추가(스펙 2.1절). 원래 스펙엔 없다가, "왜 orchestrator에 saga라는 이름이 붙었나" 논의 중 발견한 누락 — Saga 패턴의 핵심인 보상 트랜잭션이 빠져있으면 재고 누수 버그가 생김.
 - **`order-saga-orchestrator`의 주문 저장소를 인메모리 → PostgreSQL로 전환 완료 (2026-08-26~29).** 실제 상용 환경을 염두에 둔 실습을 원해서, DB 없이 가는 원래 방향(YAGNI)에서 전환함. 스택: PostgreSQL + SQLAlchemy 2.0(async) + asyncpg + Alembic(마이그레이션) — FastAPI+Postgres 조합의 실무 표준. `SQLModel`도 후보였으나 SQLAlchemy+Alembic이 더 널리 쓰이는 조합이라 이쪽으로 결정.
   - **"DB가 스키마를 주도"(database-first, `sqlacodegen`으로 모델 역생성) 방식도 검토했으나 기각.** 그 방식은 여러 언어/팀이 하나의 DB를 공유할 때 유효한데, 이 프로젝트는 DB를 오케스트레이터 하나만 쓰는 database-per-service라 근거가 약함. Alembic(코드가 스키마를 주도) 쪽이 실무 표준이자 이 프로젝트 원칙과 일관됨.
-  - **스코프**: 이번엔 오케스트레이터의 주문 저장소만 DB로 옮김. `inventory-service`(아직 미구현)의 재고는 당분간 인메모리로 시작하고, 필요해지면 database-per-service 원칙대로 자기만의 별도 DB를 갖는 방향으로 나중에 확장.
+  - **스코프**: 이번엔 오케스트레이터의 주문 저장소만 DB로 옮김. (그 뒤 `inventory-service`도 2026-08-27~31에 자기만의 `inventory-postgres`를 갖고 구현됨 — database-per-service. 당시엔 "인메모리로 시작"을 예상했으나 실제론 처음부터 PostgreSQL로 갔음, 위 "inventory-service wave 2" 참고.)
   - **모델링 세부 결정**: `OrderStatus` enum은 순환참조 방지를 위해 `orders.py`가 아니라 `models.py`에 정의(`orders.py`가 이걸 import). `OrderModel.status`는 SQLAlchemy 네이티브 Enum이 아니라 그냥 `Mapped[str]`로 — 상태값을 자주 추가해온 프로젝트라(재시도/DLQ/알림 단계 등), 네이티브 ENUM이면 값 추가마다 `ALTER TYPE` 마이그레이션이 필요해서 부담됨. `OrderModel.id`는 `Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)` — DB엔 네이티브 UUID로 저장(공간 효율/형식 검증)하면서 Python 쪽엔 여전히 `str`로 받아서 기존 코드 변경 없음.
   - **Alembic 관련 실전 팁**: `alembic init -t async <dir>`을 로컬(호스트, `uv` 있으면)에서 실행 — DB 접속이 필요 없는 순수 스캐폴딩이라 Docker와 무관하게 처리 가능하고 `-t async`면 비동기 엔진용 `env.py`가 이미 마련됨. 생성된 `alembic.ini`/`alembic/`은 `docker-compose.yaml`에 마운트 추가해서 컨테이너(`docker compose exec`)가 보게 함 — `postgres` 같은 도커 네트워크 전용 호스트명 때문에 실제 마이그레이션 생성/적용 명령 자체는 컨테이너 안에서 실행해야 함. 마이그레이션을 앱 시작 시 자동 실행하게 하지 않음(여러 인스턴스 동시 기동 시 경합 위험) — `docker compose exec`로 수동 실행하는 별도 단계로 분리.
   - **세션 관리는 `db.py`의 `get_session()`(`@asynccontextmanager`)이 전담** — "Unit of Work" 패턴. 정상 종료 시 `commit()`, 예외 시 `rollback()` 후 재발생. `orders.py`의 각 함수(`create_order`/`get_order`/`update_status`)가 이걸로 자기 세션을 직접 열고 닫아서, 호출부(`main.py`, `saga.py`)는 세션 존재 자체를 몰라도 됨 — FastAPI `Depends()` 기반 요청별 세션 주입 대신 택한 더 단순한 방식(이 프로젝트 규모엔 이 정도로 충분).
