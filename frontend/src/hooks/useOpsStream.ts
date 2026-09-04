@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { OpsSummary, SagaEvent } from "../types/order";
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+import { API_BASE_URL } from "../lib/api";
 
 export interface OpsStreamState {
   events: SagaEvent[];
@@ -22,7 +21,7 @@ export function useOpsStream(initialSummary: OpsSummary): OpsStreamState {
   }, [initialSummary]);
 
   useEffect(() => {
-    const source = new EventSource(`${BASE_URL}/sse/ops`);
+    const source = new EventSource(`${API_BASE_URL}/sse/ops`);
 
     source.onmessage = (message) => {
       const event: SagaEvent = JSON.parse(message.data);

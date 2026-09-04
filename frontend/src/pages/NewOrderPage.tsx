@@ -1,17 +1,22 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createOrder, fetchProducts } from "../lib/api";
 
 export function NewOrderPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: products } = useQuery({ queryKey: ["products"], queryFn: fetchProducts });
   const [productId, setProductId] = useState("");
   const [cardNumber, setCardNumber] = useState("");
 
   const mutation = useMutation({
     mutationFn: createOrder,
-    onSuccess: (order) => navigate(`/orders/${order.order_id}`),
+    onSuccess: (order) => {
+      // 주문 목록 캐시를 무효화해서, 목록 페이지로 돌아갈 때 새 주문이 포함된 최신 목록을 다시 받아오게 한다.
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      navigate(`/orders/${order.order_id}`);
+    },
   });
 
   function handleSubmit(event: FormEvent) {
@@ -28,7 +33,7 @@ export function NewOrderPage() {
         <option value="">상품 선택</option>
         {products?.map((p) => (
           <option key={p.product_id} value={p.product_id}>
-            {p.product_name} {p.demo_note ? `(${p.demo_note})` : ""}
+            {p.product_name} (재고 {p.stock})
           </option>
         ))}
       </select>

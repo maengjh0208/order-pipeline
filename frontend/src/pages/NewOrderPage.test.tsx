@@ -16,20 +16,20 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 describe("NewOrderPage", () => {
-  it("lists fetched products as options, including their demo note", async () => {
+  it("lists fetched products as options with their stock", async () => {
     vi.spyOn(api, "fetchProducts").mockResolvedValue([
-      { product_id: "p2", product_name: "한정판 스니커즈", stock: 1, demo_note: "재고 1개" } as never,
+      { product_id: "p2", product_name: "한정판 스니커즈", stock: 1 },
     ]);
 
     renderWithProviders(<NewOrderPage />);
 
     expect(await screen.findByText(/한정판 스니커즈/)).toBeInTheDocument();
-    expect(screen.getByText(/재고 1개/)).toBeInTheDocument();
+    expect(screen.getByText(/재고 1/)).toBeInTheDocument();
   });
 
   it("submits the selected product and card number via createOrder", async () => {
     vi.spyOn(api, "fetchProducts").mockResolvedValue([
-      { product_id: "p1", product_name: "무선 이어폰", stock: 10, demo_note: null } as never,
+      { product_id: "p1", product_name: "무선 이어폰", stock: 10 },
     ]);
     const createOrderSpy = vi
       .spyOn(api, "createOrder")

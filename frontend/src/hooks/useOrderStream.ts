@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { OrderStatus, SagaEvent } from "../types/order";
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+import { API_BASE_URL } from "../lib/api";
 
 export interface OrderStreamState {
   status: OrderStatus | null;
@@ -21,7 +20,7 @@ export function useOrderStream(orderId: string, initialStatus: OrderStatus | nul
   useEffect(() => {
     if (!orderId) return;
 
-    const source = new EventSource(`${BASE_URL}/sse/orders/${orderId}`);
+    const source = new EventSource(`${API_BASE_URL}/sse/orders/${orderId}`);
 
     source.onmessage = (message) => {
       const event: SagaEvent = JSON.parse(message.data);

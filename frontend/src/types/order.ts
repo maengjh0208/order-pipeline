@@ -21,34 +21,18 @@ export interface SagaEvent {
   saga_step: SagaStep;
   from_status: OrderStatus;
   to_status: OrderStatus;
-  attempt: number;
-  max_attempts: number;
-  reason: string | null;
   occurred_at: string;
-}
-
-export interface OrderItem {
-  product_id: string;
-  product_name: string;
-  quantity: number;
-}
-
-export interface OrderHistoryEntry {
-  from_status: OrderStatus;
-  to_status: OrderStatus;
-  occurred_at: string;
-  reason: string | null;
-  attempt: number;
+  // 실제 오케스트레이터는 update_status 시점에 이 3개를 채우지 않는다 (스펙 4.2절).
+  // mock 서버는 채워 보내므로 optional로 둔다. 이벤트 로그 테이블은 렌더링하지 않음.
+  attempt?: number;
+  max_attempts?: number;
+  reason?: string | null;
 }
 
 export interface Order {
   order_id: string;
   current_status: OrderStatus;
-  created_at: string;
-  updated_at: string;
-  items: OrderItem[];
-  card_number: string;
-  history: OrderHistoryEntry[];
+  items: { product_id: string; quantity: number }[];
 }
 
 export interface OpsSummary {

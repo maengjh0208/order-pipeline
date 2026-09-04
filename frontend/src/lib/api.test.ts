@@ -42,7 +42,7 @@ describe("createOrder", () => {
 
 describe("fetchProducts", () => {
   it("returns the product list", async () => {
-    const mockProducts = [{ product_id: "p1", product_name: "이어폰", stock: 10, demo_note: null }];
+    const mockProducts = [{ product_id: "p1", product_name: "이어폰", stock: 10 }];
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => mockProducts }));
 
     const result = await fetchProducts();
